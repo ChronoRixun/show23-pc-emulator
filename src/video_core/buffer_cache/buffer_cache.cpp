@@ -127,8 +127,30 @@ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, bool assume_lock
 }
 
 void BufferCache::UnmarkRegionAsGpuModified(VAddr device_addr, u64 size, bool is_write) {
-    memory_tracker->UnmarkRegionAsGpuModified(device_addr, size, is_write);
     gpu_modified_ranges.Subtract(device_addr, size);
+    // Preserve any live GPU-written bytes on the partially covered edge pages.
+    constexpr u64 page_size = 4_KB;
+    const auto page_has_gpu_bytes = [this](VAddr page) {
+        bool found = false;
+        gpu_modified_ranges.ForEachInRange(page, page_size, [&](VAddr, VAddr) { found = true; });
+        return found;
+    };
+    VAddr start = device_addr;
+    VAddr end = device_addr + size;
+    const VAddr first_page = Common::AlignDown(start, page_size);
+    const VAddr last_page = Common::AlignDown(end - 1, page_size);
+    const bool head_shared = page_has_gpu_bytes(first_page);
+    const bool tail_shared = last_page != first_page && page_has_gpu_bytes(last_page);
+    if (head_shared) {
+        start = first_page + page_size;
+    }
+    if (tail_shared) {
+        end = last_page;
+    }
+    if (start >= end) {
+        return;
+    }
+    memory_tracker->UnmarkRegionAsGpuModified(start, end - start, is_write);
 }
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool async,

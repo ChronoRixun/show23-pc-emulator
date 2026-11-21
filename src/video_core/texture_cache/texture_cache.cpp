@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <algorithm>
 #include <limits>
 #include <xxhash.h>
@@ -224,22 +225,11 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
 }
 
 void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
-    // Mark the image at the written address, then follow images stored right after it
-    // (e.g. the chroma planes after a luma plane).
-    const VAddr end = address + max_size;
-    VAddr next = address;
-    while (next < end) {
-        VAddr next_end = 0;
-        ForEachImageWithAddress(next, [&](ImageId image_id, Image& image) {
-            if (image.info.guest_address != next) {
-                return;
-            }
-            // Ensure image is reuploaded when accessed again.
+    ForEachImageInRegion(address, max_size, [&](ImageId, Image& image) {
+        if (image.Overlaps(address, max_size)) {
             image.flags |= ImageFlagBits::GpuDirty;
-            next_end = std::max<VAddr>(next_end, next + image.info.guest_size);
-        });
-        next = next_end > next ? next_end : end;
-    }
+        }
+    });
 }
 
 void TextureCache::MarkAsMaybeGpuDirty(VAddr addr, size_t size) {
@@ -370,6 +360,39 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
             (image_info.type == AmdGpu::ImageType::Color3D ||
              cache_image.info.type == AmdGpu::ImageType::Color3D)) {
             return {ExpandImage(image_info, cache_image_id), -1, -1};
+        }
+
+        // Image expansion rules adapted from victorgbd/mlb_pc (GPL-2.0-or-later).
+        if (Show23::Enabled()) {
+            // The game compresses textures on the GPU by writing an uncompressed image with one
+            // texel per block over the address of a compressed one. Re-make the cached image
+            // instead of writing through a view of the compressed format.
+            if (!image_info.props.is_block && cache_image.info.props.is_block) {
+                return {ExpandImage(image_info, cache_image_id), -1, -1};
+            }
+            // The game draws composed textures (faces, uniforms) into a one-mip target and then
+            // reads the same memory in another format with the full mip chain. The view rule
+            // below would hand back the short image, FindImage would then discard it and upload
+            // guest memory instead, losing what was drawn ("Image overlap resolve failed").
+            if (image_info.pixel_format != cache_image.info.pixel_format &&
+                True(cache_image.flags & ImageFlagBits::GpuModified) &&
+                image_info.type == cache_image.info.type &&
+                image_info.size == cache_image.info.size &&
+                image_info.num_samples == cache_image.info.num_samples &&
+                image_info.guest_size > cache_image.info.guest_size &&
+                !cache_image.info.resources.Contains(image_info.resources) &&
+                IsVulkanFormatCompatible(cache_image.info.pixel_format, image_info.pixel_format)) {
+                static u64 Show23::Enabled()_count = 0;
+                if (Show23::Enabled()_count++ < 20) {
+                    LOG_ERROR(Render_Vulkan,
+                              "[SCOUT] kept a GPU-drawn image at {:#x} ({}x{}, {} mips) and "
+                              "expanded it to {} mips instead of discarding it",
+                              image_info.guest_address, image_info.size.width,
+                              image_info.size.height, cache_image.info.resources.levels,
+                              image_info.resources.levels);
+                }
+                return {ExpandImage(image_info, cache_image_id), -1, -1};
+            }
         }
 
         const bool pow2_padding_only =
