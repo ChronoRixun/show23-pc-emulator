@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <algorithm>
 #include <magic_enum/magic_enum.hpp>
 #include <xxhash.h>
@@ -168,7 +169,38 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
             std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
         const VAddr window_end = std::min<VAddr>(
             std::max<VAddr>(window_start + WindowSize, device_addr + size), arena_end);
-        DownloadMemory(arena, window_start, window_end - window_start, async);
+        if (Show23::Enabled() && !async) {
+            std::vector<std::function<void()>> operations;
+            DownloadMemory(arena, window_start, window_end - window_start, true, &operations);
+            bool known_window = false;
+            for (const auto& [hot_start, hot_end] : hot_windows) {
+                if (hot_start == window_start) {
+                    known_window = true;
+                    continue;
+                }
+                if (!memory_tracker->IsRegionGpuModified(hot_start, hot_end - hot_start)) {
+                    continue;
+                }
+                const auto* hot_arena =
+                    GetArena(hot_start >> block_shift, (hot_end - 1) >> block_shift);
+                if (hot_arena == nullptr || hot_start < hot_arena->cpu_addr ||
+                    hot_end > hot_arena->cpu_addr + hot_arena->size_bytes) {
+                    continue;
+                }
+                DownloadMemory(hot_arena, hot_start, hot_end - hot_start, true, &operations);
+            }
+            if (!known_window && hot_windows.size() < 512) {
+                hot_windows.emplace_back(window_start, window_end);
+            }
+            if (!operations.empty()) {
+                scheduler.Finish();
+                for (auto& operation : operations) {
+                    operation();
+                }
+            }
+        } else {
+            DownloadMemory(arena, window_start, window_end - window_start, async);
+        }
         if (is_write) {
             memory_tracker->MarkRegionAsCpuModified(device_addr, size);
         }
@@ -180,7 +212,8 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
     }
 }
 
-void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size, bool async) {
+void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size, bool async,
+                                 std::vector<std::function<void()>>* batch) {
     boost::container::small_vector<vk::BufferCopy, 1> copies;
     u64 total_size_bytes = 0;
     const VAddr arena_base = arena->cpu_addr;
@@ -226,7 +259,9 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
         }
     };
 
-    if (async) {
+    if (batch) {
+        batch->emplace_back(std::move(write_data));
+    } else if (async) {
         scheduler.DeferOperation(std::move(write_data));
     } else {
         scheduler.Finish();

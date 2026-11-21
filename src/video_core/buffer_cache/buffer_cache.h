@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <functional>
+#include <vector>
 #include <deque>
 #include <boost/container/small_vector.hpp>
 
@@ -153,7 +155,8 @@ private:
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
-    void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size, bool async);
+    void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size, bool async,
+                        std::vector<std::function<void()>>* batch = nullptr);
 
     bool SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size, bool is_written,
                            bool is_texel_buffer);
@@ -173,6 +176,7 @@ private:
     Buffer gds_buffer;
     std::unique_ptr<Buffer> null_index_buffer;
     RangeSet gpu_modified_ranges;
+    std::vector<std::pair<VAddr, VAddr>> hot_windows;
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
