@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <fmt/format.h>
 #include "common/arch.h"
 #include "common/assert.h"
@@ -40,6 +41,31 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
     if (pExp != nullptr && pExp->ExceptionRecord != nullptr) {
         code = pExp->ExceptionRecord->ExceptionCode;
         address = pExp->ExceptionRecord->ExceptionAddress;
+    }
+
+    if (code == EXCEPTION_ACCESS_VIOLATION && Show23::LocalActive() && pExp->ContextRecord &&
+        pExp->ExceptionRecord->NumberParameters >= 2 &&
+        pExp->ExceptionRecord->ExceptionInformation[0] == 0 &&
+        pExp->ExceptionRecord->ExceptionInformation[1] < 0x100000) {
+        auto& ctx = *pExp->ContextRecord;
+        const u64 offset = ctx.Rip - Show23::LocalMainBase();
+        const u8 operand = offset == 0xa3d1fb ? 0x07 : offset == 0xa3d219 ? 0x09
+                         : offset == 0xa3d23b ? 0x1f : 0;
+        u8 instruction[2]{};
+        SIZE_T got{};
+        if (operand && ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(ctx.Rip),
+                                         instruction, sizeof(instruction), &got) &&
+            got == sizeof(instruction) && instruction[0] == 0x8b && instruction[1] == operand) {
+            if (operand == 0x07) {
+                ctx.Rax = 0;
+            } else if (operand == 0x09) {
+                ctx.Rcx = 0;
+            } else {
+                ctx.Rbx = 0;
+            }
+            ctx.Rip += sizeof(instruction);
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
     }
 
     Ucontext guest_context{pExp->ContextRecord};

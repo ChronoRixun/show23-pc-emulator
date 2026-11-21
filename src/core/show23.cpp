@@ -7,6 +7,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <cctype>
+#include <openssl/pem.h>
+#include <openssl/x509v3.h>
 #include <vector>
 #include <openssl/evp.h>
 #include "common/logging/log.h"
@@ -86,7 +90,66 @@ const std::filesystem::path& LocalCaPath() { return local_ca; }
 bool Enabled() { return enabled; }
 bool LocalActive() { return local_main != 0; }
 VAddr LocalMainBase() { return local_main; }
-void ActivateLocal(VAddr base) { local_main = base; }
+void InstallLocalTrust(VAddr base, u64 bytes_from_record) {
+#ifdef _WIN32
+    constexpr size_t max_record = 64 * 1024;
+    if (!enabled || !LocalRequested() || !base || !bytes_from_record) {
+        Refuse("no verified local trust record is available");
+    }
+    std::ifstream input(local_ca, std::ios::binary | std::ios::ate);
+    const std::streamoff length = input ? static_cast<std::streamoff>(input.tellg()) : -1;
+    if (length <= 0 || length >= max_record) {
+        Refuse("missing or invalid local CA file");
+    }
+    std::string ca(static_cast<size_t>(length), '\0');
+    input.seekg(0);
+    if (!input.read(ca.data(), length)) {
+        Refuse("could not read the local CA");
+    }
+    constexpr std::string_view marker = "-----BEGIN CERTIFICATE-----";
+    std::unique_ptr<BIO, decltype(&BIO_free)> bio{BIO_new_mem_buf(ca.data(), ca.size()), &BIO_free};
+    std::unique_ptr<X509, decltype(&X509_free)> cert{
+        bio ? PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr) : nullptr, &X509_free};
+    if (!ca.starts_with(marker) || !cert || X509_check_ca(cert.get()) <= 0) {
+        Refuse("local trust file must contain a public CA certificate");
+    }
+    char trailing{};
+    while (BIO_read(bio.get(), &trailing, 1) > 0) {
+        if (!std::isspace(static_cast<unsigned char>(trailing))) {
+            Refuse("unexpected data after the public CA");
+        }
+    }
+    auto* target = reinterpret_cast<u8*>(base + TrustRecordOffset);
+    const size_t limit = std::min<u64>(bytes_from_record, max_record);
+    std::string original;
+    while (original.size() < limit) {
+        char block[128];
+        SIZE_T got{};
+        const size_t count = std::min(sizeof(block), limit - original.size());
+        if (!ReadProcessMemory(GetCurrentProcess(), target + original.size(), block, count, &got) ||
+            got != count) {
+            Refuse("verified trust record cannot be read");
+        }
+        const auto end = std::find(block, block + count, '\0');
+        original.append(block, end);
+        if (end != block + count) {
+            break;
+        }
+    }
+    if (original.size() == limit || !original.starts_with(marker) || ca.size() > original.size()) {
+        Refuse("public CA does not fit the expected trust record");
+    }
+    ca.resize(original.size() + 1, '\0');
+    SIZE_T written{};
+    if (!WriteProcessMemory(GetCurrentProcess(), target, ca.data(), ca.size(), &written) ||
+        written != ca.size()) {
+        Refuse("could not install the local CA into the verified main image");
+    }
+    local_main = base;
+#else
+    Refuse("local mode requires Windows");
+#endif
+}
 
 [[noreturn]] void Refuse(const char* reason) {
     std::fprintf(stderr, "MLB The Show 23: %s\n", reason);

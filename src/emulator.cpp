@@ -706,9 +706,27 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
 
     std::jthread init_thread{[&, this]() {
         // Load the module with the linker.
-        if (linker->LoadModule(guest_eboot_path, false, std::move(verified_main)) == -1) {
+        const s32 main_id = linker->LoadModule(guest_eboot_path, false, std::move(verified_main));
+        if (main_id == -1) {
+            if (Show23::LocalRequested()) {
+                Show23::Refuse("could not map the verified main executable");
+            }
             LOG_CRITICAL(Loader, "Failed to load game's eboot.bin: {}", guest_eboot_path);
             std::quick_exit(0);
+        }
+
+        if (Show23::LocalRequested()) {
+            const auto* main = linker->GetModule(main_id);
+            u64 available{};
+            for (const auto& segment : main->elf.GetProgramHeader()) {
+                if ((segment.p_type == PT_LOAD || segment.p_type == PT_SCE_RELRO) &&
+                    segment.p_vaddr <= Show23::TrustRecordOffset &&
+                    Show23::TrustRecordOffset - segment.p_vaddr < segment.p_filesz) {
+                    available = segment.p_filesz - (Show23::TrustRecordOffset - segment.p_vaddr);
+                    break;
+                }
+            }
+            Show23::InstallLocalTrust(main->GetBaseAddress(), available);
         }
 
 #ifdef ENABLE_DISCORD_RPC
