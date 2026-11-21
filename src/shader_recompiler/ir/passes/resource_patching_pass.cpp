@@ -114,6 +114,7 @@ public:
     u32 Add(const ImageResource& desc) {
         const u32 index{Add(image_resources, desc, [&desc](const auto& existing) {
             return desc.sharp_fetch == existing.sharp_fetch && desc.is_array == existing.is_array &&
+                   desc.is_table == existing.is_table &&
                    desc.mip_fallback_mode == existing.mip_fallback_mode &&
                    desc.constant_mip_index == existing.constant_mip_index &&
                    desc.post_op == existing.post_op;
@@ -227,6 +228,30 @@ void PatchBufferSharp(const ResourceDiscovery& resource, Info& info, Descriptors
     inst.SetArg(0, ir.Imm32(buffer_binding));
 }
 
+// If the T# is read out of a descriptor table at an entry chosen per pixel (the userdata
+// flattening pass marks such reads), returns the dword offset that selects the entry.
+static IR::Value TableEntryOffset(const SharpReference& sharp) {
+    if (sharp.num_dwords != SHARP_TABLE_ENTRY_DWORDS) {
+        return {};
+    }
+    for (u32 i = 0; i < sharp.num_dwords; ++i) {
+        const IR::Inst* dword = sharp.dwords[i].TryInst();
+        if (!dword || dword->GetOpcode() != IR::Opcode::ReadConstBuffer ||
+            !dword->Flags<IR::BufferInstInfo>().table_entry) {
+            return {};
+        }
+    }
+    IR::Value offset = sharp.dwords[0].Inst()->Arg(1);
+    if (const IR::Inst* add = offset.TryInst(); add && add->GetOpcode() == IR::Opcode::IAdd32) {
+        if (add->Arg(1).IsImmediate() && !add->Arg(0).IsImmediate()) {
+            offset = add->Arg(0);
+        } else if (add->Arg(0).IsImmediate() && !add->Arg(1).IsImmediate()) {
+            offset = add->Arg(1);
+        }
+    }
+    return offset;
+}
+
 void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors& descriptors,
                      const Profile& profile) {
     IR::Inst& inst = *resource.user;
@@ -248,6 +273,24 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
         .is_r128 = bool(inst_info.is_r128),
         .post_op = resource.sharps[0].post_op,
     };
+
+    const IR::Value table_offset = TableEntryOffset(resource.sharps[0]);
+    if (!table_offset.IsEmpty()) {
+        using Summary = SharpFetch<AmdGpu::Image>::Summary;
+        if (image_res.sharp_fetch.summary == Summary::SingleLoad && !is_written &&
+            !image_res.is_r128) {
+            image_res.is_table = true;
+            LOG_INFO(Render_Recompiler,
+                     "Shader {:#x} selects a texture per pixel from a descriptor table; binding "
+                     "the first {} entries as an array",
+                     info.pgm_hash, SHARP_TABLE_ENTRIES);
+        } else {
+            LOG_ERROR(Render_Recompiler,
+                      "Shader {:#x} indexes a descriptor table in a way that is not supported "
+                      "(written {}, r128 {})",
+                      info.pgm_hash, is_written, image_res.is_r128);
+        }
+    }
 
     auto image = image_res.GetSharp(info);
     ASSERT(image.GetType() != AmdGpu::ImageType::Invalid);
@@ -321,6 +364,12 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
     u32 image_binding = descriptors.Add(image_res);
 
     IR::IREmitter ir{*inst.GetParent(), IR::Block::InstructionList::s_iterator_to(inst)};
+
+    if (image_res.is_table) {
+        // The offset is in dwords and an entry is SHARP_TABLE_ENTRY_DWORDS long.
+        const IR::U32 entry = ir.ShiftRightLogical(IR::U32{table_offset}, ir.Imm32(3U));
+        ir.ImageTableIndex(ir.Imm32(image_binding), entry);
+    }
 
     if (inst.GetOpcode() == IR::Opcode::ImageSampleRaw) {
         auto& lod_prod = resource.sharps[1].post_op_data.lod_prod;

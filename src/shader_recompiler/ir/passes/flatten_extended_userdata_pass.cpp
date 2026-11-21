@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
+#include <atomic>
+#include <cstring>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 #include <boost/container/flat_map.hpp>
 #include <queue>
 #include <xbyak/xbyak.h>
@@ -13,6 +18,7 @@
 #include "common/path_util.h"
 #include "common/signal_context.h"
 #include "core/emulator_settings.h"
+#include "core/memory.h"
 #include "core/signals.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/ir_emitter.h"
@@ -37,6 +43,35 @@ PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     g_srt_codegen.db(ptr, size);
     g_srt_codegen.ready();
     return func_addr;
+}
+
+void CopySharpTables(const PersistentSrtInfo& srt, u32* flatbuf) {
+    constexpr u32 table_dwords = SHARP_TABLE_ENTRIES * SHARP_TABLE_ENTRY_DWORDS;
+    constexpr u64 entry_bytes = SHARP_TABLE_ENTRY_DWORDS * sizeof(u32);
+    constexpr u64 max_guest_address = 1ULL << 40;
+    for (u32 i = 0; i < srt.num_sharp_tables; ++i) {
+        const auto& table = srt.sharp_tables[i];
+        u32 raw[4];
+        for (u32 dw = 0; dw < 4; ++dw) {
+            raw[dw] = flatbuf[table.vsharp_off_dw[dw]];
+        }
+        AmdGpu::Buffer vsharp;
+        std::memcpy(&vsharp, raw, sizeof(vsharp));
+        u32* dst = flatbuf + table.table_off_dw;
+        u64 entries = std::min<u64>(vsharp.GetSize() / entry_bytes, SHARP_TABLE_ENTRIES);
+        if (vsharp.base_address == 0 ||
+            vsharp.base_address + entries * entry_bytes >= max_guest_address) {
+            entries = 0;
+        }
+        // Read through the backing pages: a stale pointer gives zeros, not a fault.
+        if (entries != 0) {
+            Core::Memory::Instance()->CopySparseMemory(
+                vsharp.base_address, reinterpret_cast<u8*>(dst), entries * entry_bytes);
+        }
+        const u32 copied_dwords = static_cast<u32>(entries) * SHARP_TABLE_ENTRY_DWORDS;
+        std::memset(dst + copied_dwords, 0, (table_dwords - copied_dwords) * sizeof(u32));
+
+    }
 }
 
 } // namespace Shader
@@ -169,6 +204,9 @@ struct PassInfo {
 
     // Bumped during codegen to assign offsets to readconsts
     u16 dst_off_dw;
+
+    // Receives the descriptor tables the shader indexes per pixel
+    Shader::PersistentSrtInfo* srt_info{};
 
     PtrUserList* GetUsesAsPointer(IR::Inst* inst) {
         auto it = pointer_uses.find(inst);
@@ -585,6 +623,77 @@ static inline void PopPtr(Xbyak::CodeGenerator& c) {
     c.pop(rdi);
 }
 
+// True when the walker can evaluate the value on the CPU from user data and constant memory.
+static bool IsCpuComputableOffset(const IR::Value& value, u32 depth = 0) {
+    if (value.IsImmediate()) {
+        return true;
+    }
+    const IR::Inst* inst = value.Inst();
+    if (depth > 16 || !IsAllowedOffsetInstruction(inst)) {
+        return false;
+    }
+    if (inst->GetOpcode() == IR::Opcode::GetUserData ||
+        inst->GetOpcode() == IR::Opcode::ReadConst ||
+        inst->GetOpcode() == IR::Opcode::ReadConstBuffer) {
+        return true;
+    }
+    for (size_t arg = 0; arg < inst->NumArgs(); ++arg) {
+        if (!IsCpuComputableOffset(inst->Arg(arg), depth + 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct TableOffset {
+    IR::Inst* index_dw{}; // dword offset of the selected entry, not computable on the CPU
+    u32 dword{};          // dword within the entry
+    bool found{};
+};
+
+// Recognises "index_dw + k" (or a bare index_dw) where index_dw depends on a per-pixel value,
+// which is how a shader reads dword k of an entry it selects from a table of descriptors.
+static TableOffset MatchTableOffset(const IR::Value& off_dw) {
+    if (!Show23::Enabled()) {
+        return {};
+    }
+    if (off_dw.IsImmediate()) {
+        return {};
+    }
+    IR::Value index = off_dw;
+    u32 dword = 0;
+    if (IR::Inst* inst = off_dw.Inst(); inst->GetOpcode() == IR::Opcode::IAdd32) {
+        if (inst->Arg(1).IsImmediate() && !inst->Arg(0).IsImmediate()) {
+            index = inst->Arg(0);
+            dword = inst->Arg(1).U32();
+        } else if (inst->Arg(0).IsImmediate() && !inst->Arg(1).IsImmediate()) {
+            index = inst->Arg(1);
+            dword = inst->Arg(0).U32();
+        }
+    }
+    if (dword >= SHARP_TABLE_ENTRY_DWORDS || IsCpuComputableOffset(index)) {
+        return {};
+    }
+    return {index.Inst(), dword, true};
+}
+
+// Flat buffer offset of a V# dword the walker has already copied, or 0 if there is none.
+static u16 FlatOffsetOfDword(PassInfo& pass_info, const IR::Value& value) {
+    if (value.IsImmediate()) {
+        return 0;
+    }
+    IR::Inst* inst = value.Inst();
+    switch (inst->GetOpcode()) {
+    case IR::Opcode::GetUserData:
+        return static_cast<u16>(inst->Arg(0).ScalarReg());
+    case IR::Opcode::ReadConst:
+    case IR::Opcode::ReadConstBuffer:
+        return GetFlatbufOffset(pass_info.DeduplicateInstruction(inst));
+    default:
+        return 0;
+    }
+}
+
 static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& pass_info,
                          Xbyak::CodeGenerator& c) {
     if (subtree->GetOpcode() == IR::Opcode::ReadConst && subtree->Flags<u16>() == 0 ||
@@ -605,9 +714,49 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
     // flattened buffer.
     // TODO src and dst are contiguous. Optimize with wider loads/stores
     // TODO if this subtree is dynamically indexed, don't compact it (keep it sparse)
+    // Flat buffer offset of the copy of the table this pointer addresses, once one is needed.
+    // Lookups with different per-pixel indices into the same table share the copy.
+    u16 table_base = 0;
     for (auto [src_off_dw, use] : *use_list) {
         if (src_off_dw.IsImmediate()) {
             c.mov(r10d, ptr[rdi + (src_off_dw.U32() << 2)]);
+        } else if (const TableOffset table = MatchTableOffset(src_off_dw);
+                   table.found && off_dw.IsImmediate() &&
+                   use->GetOpcode() == IR::Opcode::ReadConstBuffer) {
+            // The entry is chosen per pixel, so no single dword can be flattened. Copy the
+            // table once and point this read at its dword of entry 0.
+            if (table_base == 0) {
+                // The copy is not done by walker code: a fault there gets the faulting load
+                // patched out for good, which for a copy loop would empty the table forever.
+                // Record where the walker leaves the table's V# and where the copy goes;
+                // CopySharpTables fills it in after the walker has run.
+                constexpr u32 table_dwords = SHARP_TABLE_ENTRIES * SHARP_TABLE_ENTRY_DWORDS;
+                auto& srt = *pass_info.srt_info;
+                const IR::Inst* vsharp = use->Arg(0).Inst();
+                PersistentSrtInfo::SharpTable entry{};
+                bool known = vsharp->NumArgs() == 4 &&
+                             srt.num_sharp_tables < srt.sharp_tables.size() &&
+                             u32(pass_info.dst_off_dw) + table_dwords < 0xffffu;
+                for (size_t i = 0; known && i < 4; ++i) {
+                    entry.vsharp_off_dw[i] = FlatOffsetOfDword(pass_info, vsharp->Arg(i));
+                    known = entry.vsharp_off_dw[i] != 0;
+                }
+                if (!known) {
+                    LOG_ERROR(Render_Recompiler,
+                              "Descriptor table indexed per pixel cannot be copied: its V# is "
+                              "not in the flat buffer or there is no room");
+                    continue;
+                }
+                table_base = pass_info.dst_off_dw;
+                entry.table_off_dw = table_base;
+                srt.sharp_tables[srt.num_sharp_tables++] = entry;
+                pass_info.dst_off_dw += table_dwords;
+            }
+            auto use_info = use->Flags<IR::BufferInstInfo>();
+            use_info.table_entry.Assign(1u);
+            use_info.flatbuf_off_dw.Assign(table_base + table.dword);
+            use->SetFlags(use_info);
+            continue;
         } else {
             if (!ComputeOffset(c, r10d, pass_info, src_off_dw)) {
                 LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
@@ -746,6 +895,7 @@ void SimplifyReadConstAddressAdd(IR::Inst& inst) {
 void FlattenExtendedUserdataPass(IR::Program& program) {
     auto& post_order = program.post_order_blocks;
     PassInfo pass_info;
+    pass_info.srt_info = &program.info.srt_info;
 
     // traverse at end and assign offsets to duplicate readconsts, using
     // vn_to_inst as the source
@@ -818,6 +968,7 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
         }
     }
 
+    std::vector<std::pair<IR::Inst*, IR::Inst*>> same_slot_reads;
     for (auto inst : all_readconsts) {
         if (pass_info.DeduplicateInstruction(inst) != inst) {
             // This is a duplicate of a readconst we've already visited
@@ -838,7 +989,15 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
         auto ptr_uses_kv = pass_info.pointer_uses.try_emplace(ptr_lo, PassInfo::PtrUserList{});
         PassInfo::PtrUserList& user_list = ptr_uses_kv.first->second;
 
-        user_list[inst->Arg(1)] = inst;
+        // Two reads of the same pointer at the same offset that are not value-number duplicates
+        // (the shader fetched the descriptor twice through separate copies) share one slot. The
+        // later one used to replace the earlier one here, which then got no flat-buffer offset
+        // and its resource bound null. Same fix as victorgbd/mlb_pc (shadPS4 video core,
+        // GPL-2.0-or-later).
+        const auto [slot, inserted] = user_list.try_emplace(inst->Arg(1), inst);
+        if (!inserted && slot->second != inst) {
+            same_slot_reads.emplace_back(inst, slot->second);
+        }
 
         if (ptr_lo->GetOpcode() == IR::Opcode::GetUserData) {
             IR::ScalarReg ud_reg = ptr_lo->Arg(0).ScalarReg();
@@ -848,11 +1007,29 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
 
     GenerateSrtProgram(program.info, pass_info);
 
+    for (const auto& [read, owner] : same_slot_reads) {
+        SetFlatbufOffset(read, GetFlatbufOffset(owner));
+        if (read->GetOpcode() == IR::Opcode::ReadConstBuffer &&
+            owner->GetOpcode() == IR::Opcode::ReadConstBuffer &&
+            owner->Flags<IR::BufferInstInfo>().table_entry) {
+            auto info = read->Flags<IR::BufferInstInfo>();
+            info.table_entry.Assign(1u);
+            read->SetFlags(info);
+        }
+    }
+
     // Assign offsets to duplicate readconsts
     for (IR::Inst* readconst : all_readconsts) {
         ASSERT(pass_info.vn_to_inst.contains(pass_info.gvn_table.GetValueNumber(readconst)));
         IR::Inst* original = pass_info.DeduplicateInstruction(readconst);
         SetFlatbufOffset(readconst, GetFlatbufOffset(original));
+        if (original != readconst && original->GetOpcode() == IR::Opcode::ReadConstBuffer &&
+            readconst->GetOpcode() == IR::Opcode::ReadConstBuffer &&
+            original->Flags<IR::BufferInstInfo>().table_entry) {
+            auto info = readconst->Flags<IR::BufferInstInfo>();
+            info.table_entry.Assign(1u);
+            readconst->SetFlags(info);
+        }
     }
 
     program.info.RefreshFlatBuf();
@@ -867,6 +1044,8 @@ namespace Shader {
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     UNREACHABLE_MSG("RegisterWalkerCode unimplemented for target architecture.");
 }
+
+void CopySharpTables(const PersistentSrtInfo& srt, u32* flatbuf) {}
 
 namespace Optimization {
 

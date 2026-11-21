@@ -289,6 +289,10 @@ public:
         bool is_integer = false;
         bool is_storage = false;
         MipStorageFallbackMode mip_fallback_mode{};
+        /// The binding is an array holding the entries of a descriptor table; table_index is
+        /// the entry selected by the last ImageTableIndex emitted for it.
+        bool is_table = false;
+        Id table_index{};
     };
 
     enum class PointerType : u32 {

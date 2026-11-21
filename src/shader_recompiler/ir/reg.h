@@ -60,6 +60,10 @@ union BufferInstInfo {
     BitField<17, 4, AmdGpu::DataFormat> inst_data_fmt;
     BitField<21, 3, AmdGpu::NumberFormat> inst_num_fmt;
     BitField<24, 1, u64> sharp_source;
+    // Set by the userdata flattening pass on a ReadConstBuffer that reads one dword of an entry
+    // of a descriptor table indexed by a value the CPU cannot evaluate. Its flatbuf offset then
+    // addresses that dword of entry 0 of a copy of the table.
+    BitField<25, 1, u64> table_entry;
     BitField<32, 16, u64> pc;
     BitField<48, 16, u64> flatbuf_off_dw;
 };

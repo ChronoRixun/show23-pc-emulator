@@ -183,7 +183,13 @@ struct Info : InfoPersistent {
 
     void AddBindings(Backend::Bindings& bnd) const {
         bnd.buffer += buffers.size();
-        bnd.unified += buffers.size() + images.size() + samplers.size();
+        // An image declared as an array takes one binding per element, as in the emitter and
+        // the descriptor set layout; counting it as one put the next stage's bindings inside it.
+        u32 image_bindings = 0;
+        for (const auto& image : images) {
+            image_bindings += image.NumBindings(*this);
+        }
+        bnd.unified += buffers.size() + image_bindings + samplers.size();
     }
 
     void RefreshFlatBuf() {
@@ -192,6 +198,9 @@ struct Info : InfoPersistent {
         std::memcpy(flattened_ud_buf.data(), user_data.data(), user_data.size_bytes());
         if (srt_info.walker_func) {
             srt_info.walker_func(user_data.data(), flattened_ud_buf.data());
+        }
+        if (srt_info.num_sharp_tables != 0) {
+            CopySharpTables(srt_info, flattened_ud_buf.data());
         }
     }
 

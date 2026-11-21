@@ -382,6 +382,8 @@ public:
                                            TextureInstInfo info);
 
     [[nodiscard]] Value ImageHandle(const Value& tsharp_low, const Value& tsharp_high);
+    /// Selects which entry of a table image binding the following image instruction uses.
+    void ImageTableIndex(const U32& binding, const U32& index);
 
     [[nodiscard]] Value ImageSampleRaw(const Value& handle, const Value& sampler_handle,
                                        const Value& address1, const Value& address2,

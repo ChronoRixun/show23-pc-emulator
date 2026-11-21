@@ -12,7 +12,14 @@
 namespace Shader {
 
 static constexpr u32 NUM_USER_DATA_REGS = 16;
+/// Entries copied and bound for a descriptor table that a shader indexes with a per-pixel value.
+/// MLB The Show 23 keeps one scene-wide table of 1,042 textures.
+static constexpr u32 SHARP_TABLE_ENTRIES = 1088;
+static constexpr u32 SHARP_TABLE_ENTRY_DWORDS = 8;
+/// Image resources a shader stage can declare.
 static constexpr u32 NUM_IMAGES = 64;
+/// Image descriptors a pipeline can bind; a table resource takes SHARP_TABLE_ENTRIES of them.
+static constexpr u32 MAX_IMAGE_BINDINGS = NUM_IMAGES + 2 * SHARP_TABLE_ENTRIES;
 static constexpr u32 NUM_BUFFERS = 56;
 static constexpr u32 NUM_SAMPLERS = 16;
 static constexpr u32 NUM_FMASKS = 8;
@@ -132,13 +139,21 @@ struct ImageResource {
     bool is_array{};
     bool is_written{};
     bool is_r128{};
+    /// The T# is entry N of a table copied into the flat buffer, N chosen per pixel in the
+    /// shader. sharp_fetch addresses entry 0; the bindings are the table's entries in order.
+    bool is_table{};
     u8 constant_mip_index{};
     MipStorageFallbackMode mip_fallback_mode{};
     SharpFetchPostOp post_op{};
 
     constexpr AmdGpu::Image GetSharp(const auto& info) const noexcept {
+        return GetSharpAt(info, 0);
+    }
+
+    /// Returns the T# of one table entry (entry 0 is the only one for an ordinary image).
+    constexpr AmdGpu::Image GetSharpAt(const auto& info, u32 entry) const noexcept {
         AmdGpu::Image image{};
-        if (!Fetch(info.flattened_ud_buf.data(), &image)) {
+        if (!Fetch(info.flattened_ud_buf.data() + entry * SHARP_TABLE_ENTRY_DWORDS, &image)) {
             return AmdGpu::Image::Null(is_depth);
         }
         if (post_op == SharpFetchPostOp::ConvertCubeTo2DArray) {
@@ -171,10 +186,18 @@ struct ImageResource {
     }
 
     u32 NumBindings(const auto& info) const {
+        if (is_table) {
+            return SHARP_TABLE_ENTRIES;
+        }
         const AmdGpu::Image tsharp = GetSharp(info);
         return (mip_fallback_mode == MipStorageFallbackMode::DynamicIndex)
                    ? (tsharp.last_level - tsharp.base_level + 1)
                    : 1;
+    }
+
+    /// True when the binding is declared as an array of images in the shader.
+    bool IsArrayOfImages() const {
+        return is_table || mip_fallback_mode == MipStorageFallbackMode::DynamicIndex;
     }
 };
 using ImageResourceList = boost::container::static_vector<ImageResource, NUM_IMAGES>;
