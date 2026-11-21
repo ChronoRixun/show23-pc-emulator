@@ -8,6 +8,7 @@
 namespace Shader {
 
 struct Profile {
+    bool decorate_vertex_position{};
     u32 max_viewport_width{};
     u32 max_viewport_height{};
     u32 max_shared_memory_size{};

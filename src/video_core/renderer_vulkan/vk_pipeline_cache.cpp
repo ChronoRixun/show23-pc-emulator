@@ -319,6 +319,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                 Show23::Enabled() ? LargeTableHeapSizes : DescriptorHeapSizes} {
     const auto& vk12_props = instance.GetVk12Properties();
     profile = Shader::Profile{
+        .decorate_vertex_position = instance.DecorateVertexPosition(),
         .max_viewport_width = instance.GetMaxViewportWidth(),
         .max_viewport_height = instance.GetMaxViewportHeight(),
         .max_shared_memory_size = instance.MaxComputeSharedMemorySize(),

@@ -407,6 +407,13 @@ void DefineEntryPoint(const Info& info, const RuntimeInfo& runtime_info, EmitCon
     }
     case SwStage::Vertex:
         execution_model = spv::ExecutionModel::Vertex;
+        if (ctx.profile.decorate_vertex_position && info.hw_stage == HwStage::Vertex) {
+            ctx.AddCapability(spv::Capability::TransformFeedback);
+            ctx.AddExecutionMode(main, spv::ExecutionMode::Xfb);
+            ctx.Decorate(ctx.output_position, spv::Decoration::XfbBuffer, 0U);
+            ctx.Decorate(ctx.output_position, spv::Decoration::XfbStride, 16U);
+            ctx.Decorate(ctx.output_position, spv::Decoration::Offset, 0U);
+        }
         break;
     case SwStage::TessellationControl:
         execution_model = spv::ExecutionModel::TessellationControl;

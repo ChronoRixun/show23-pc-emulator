@@ -21,6 +21,8 @@ namespace Vulkan {
 
 class Instance {
 public:
+    bool DecorateVertexPosition() const { return decorate_vertex_position; }
+
     explicit Instance(bool validation = false, bool crash_diagnostic = false);
     explicit Instance(Frontend::WindowSDL& window, s32 physical_device_index,
                       bool enable_validation = false, bool enable_crash_diagnostic = false);
@@ -553,6 +555,7 @@ private:
     bool image_2d_view_of_3d{};
     bool image_view_min_lod{};
     bool shader_clock{};
+    bool decorate_vertex_position{};
     bool supports_memory_budget{};
     bool supports_block_texel_view{};
     u64 total_memory_budget{};
