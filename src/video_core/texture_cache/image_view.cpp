@@ -66,6 +66,11 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::Image& image, const Shader::ImageReso
     range.extent.levels = image.NumViewLevels(desc.is_array);
     range.extent.layers = image.NumViewLayers(desc.is_array);
     type = image.GetViewType(desc.is_array);
+    if (image.LayersAsDepth(desc.is_array)) {
+        type = AmdGpu::ImageType::Color3D;
+        range.base.layer = 0;
+        range.extent.layers = 1;
+    }
     min_lod = static_cast<u32>(image.min_lod);
     if (!is_storage) {
         mapping = image.DstSelect();

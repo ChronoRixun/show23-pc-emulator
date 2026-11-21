@@ -11,6 +11,7 @@
 #include "common/types.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
+#include "video_core/amdgpu/resource.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -167,6 +168,9 @@ Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
     format_properties = GetFormatProperties(physical_device);
     properties = physical_device.getProperties();
     memory_properties = physical_device.getMemoryProperties();
+    AmdGpu::host_max_array_layers = Show23::Enabled() ? properties.limits.maxImageArrayLayers
+                                                      : std::numeric_limits<u32>::max();
+    AmdGpu::host_max_volume_depth = properties.limits.maxImageDimension3D;
     CollectDeviceParameters();
     if (properties.apiVersion >= VK_API_VERSION_1_2 &&
         properties.apiVersion < TargetVulkanApiVersion && VideoCore::IsRenderDocLoaded()) {

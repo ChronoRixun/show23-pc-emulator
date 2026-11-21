@@ -979,6 +979,9 @@ Id ImageType(EmitContext& ctx, const ImageResource& desc, Id sampled_type) {
     const auto format = desc.is_atomic ? GetFormat(image) : spv::ImageFormat::Unknown;
     const auto type = image.GetViewType(desc.is_array);
     const u32 sampled = desc.is_written ? 2 : 1;
+    if (image.LayersAsDepth(desc.is_array)) {
+        return ctx.TypeImage(sampled_type, spv::Dim::Dim3D, false, false, false, sampled, format);
+    }
     switch (type) {
     case AmdGpu::ImageType::Color1D:
     case AmdGpu::ImageType::Color2D:
@@ -1034,6 +1037,7 @@ void EmitContext::DefineImagesAndSamplers() {
             .view_type = sharp.GetViewType(image_desc.is_array),
             .is_integer = is_integer,
             .is_storage = is_storage,
+            .layers_as_depth = sharp.LayersAsDepth(image_desc.is_array),
             .mip_fallback_mode = mip_fallback_mode,
             .is_table = image_desc.is_table,
         });

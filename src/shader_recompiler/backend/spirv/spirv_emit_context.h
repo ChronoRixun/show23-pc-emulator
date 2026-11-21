@@ -288,6 +288,8 @@ public:
         AmdGpu::ImageType view_type;
         bool is_integer = false;
         bool is_storage = false;
+        /// A guest array kept in a 3D image, one depth slice per layer.
+        bool layers_as_depth = false;
         MipStorageFallbackMode mip_fallback_mode{};
         /// The binding is an array holding the entries of a descriptor table; table_index is
         /// the entry selected by the last ImageTableIndex emitted for it.

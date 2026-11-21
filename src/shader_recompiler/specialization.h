@@ -48,6 +48,7 @@ struct ImageSpecialization {
     bool is_integer = false;
     bool is_storage = false;
     bool is_srgb = false;
+    bool layers_as_depth = false;
     AmdGpu::CompMapping dst_select{};
     AmdGpu::NumberConversion num_conversion{};
     // FIXME any pipeline cache changes needed?
@@ -131,6 +132,7 @@ struct StageSpecialization {
         ForEachSharp(binding, images, info->images,
                      [&](auto& spec, const auto& desc, AmdGpu::Image sharp) {
                          spec.type = sharp.GetViewType(desc.is_array);
+                         spec.layers_as_depth = sharp.LayersAsDepth(desc.is_array);
                          spec.is_integer = AmdGpu::IsInteger(sharp.GetNumberFmt());
                          spec.is_storage = desc.is_written;
                          if (spec.is_storage) {

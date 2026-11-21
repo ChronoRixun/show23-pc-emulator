@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/assert.h"
+#include "common/logging/log.h"
 #include "core/libraries/kernel/process.h"
 #include "core/libraries/videoout/buffer.h"
 #include "shader_recompiler/resource.h"
@@ -165,6 +166,14 @@ ImageInfo::ImageInfo(const AmdGpu::Image& sharp, const Shader::ImageResource& de
     pitch = image.Pitch();
     resources.levels = image.NumLevels();
     resources.layers = image.NumLayers();
+    if (image.LayersAsDepth(desc.is_array)) {
+        // More layers than a host image can have: one depth slice of a 3D image per layer.
+        // The guest layout is unchanged (thin tile modes store slices one after another).
+        type = AmdGpu::ImageType::Color3D;
+        props.is_volume = true;
+        size.depth = resources.layers;
+        resources.layers = 1;
+    }
     num_samples = image.NumSamples();
     num_bits = NumBitsPerBlock(data_fmt);
     guest_address = image.Address();

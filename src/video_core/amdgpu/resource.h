@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstring>
+#include <limits>
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/bit_field.h"
@@ -11,6 +12,11 @@
 #include "video_core/amdgpu/tiling.h"
 
 namespace AmdGpu {
+
+/// Limits of the host device, set once it is known. A guest array that reaches more layers than
+/// one host image can have is kept in a 3D image instead (see Image::LayersAsDepth).
+inline u32 host_max_array_layers = std::numeric_limits<u32>::max();
+inline u32 host_max_volume_depth = std::numeric_limits<u32>::max();
 
 // Table 8.5 Buffer Resource Descriptor [Sea Islands Series Instruction Set Architecture]
 struct Buffer {
@@ -348,6 +354,19 @@ struct Image {
             const auto max_array = std::min<u32>(last_array + 1, NumLayers());
             return max_array > base_array ? max_array - base_array : 1;
         }
+    }
+
+    /// The view reaches more array layers than one host image can have. The image is then kept
+    /// as a 3D image with one depth slice per layer and sampled at slice centres. Only for
+    /// single-level images: the levels of a 3D image shrink in depth, those of an array do not.
+    [[nodiscard]] bool LayersAsDepth(const bool is_array) const noexcept {
+        const auto view_type = GetViewType(is_array);
+        if (view_type != ImageType::Color2DArray && view_type != ImageType::Cube) {
+            return false;
+        }
+        return NumLevels() == 1 && base_array == 0 &&
+               NumViewLayers(is_array) > host_max_array_layers &&
+               NumLayers() <= host_max_volume_depth;
     }
 };
 static_assert(sizeof(Image) == 32); // 256bits
