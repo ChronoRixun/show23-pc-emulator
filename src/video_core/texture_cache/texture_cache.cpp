@@ -629,9 +629,12 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
 
     ASSERT(info.guest_address != 0);
 
+    // An exact or subrect match always starts at the requested address, so it is registered on
+    // the first page. Only walk the whole region when overlap resolution is needed.
     SmallVector<ImageId, 8> image_ids;
-    ForEachImageInRegion(info.guest_address, info.guest_size,
-                         [&](ImageId image_id, Image& image) { image_ids.push_back(image_id); });
+    ForEachImageWithAddress(info.guest_address, [&](ImageId image_id, Image& image) {
+        image_ids.push_back(image_id);
+    });
 
     ImageId image_id{};
 
@@ -669,6 +672,11 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     int view_mip{-1};
     int view_slice{-1};
     if (!image_id) {
+        image_ids.clear();
+        ForEachImageInRegion(info.guest_address, info.guest_size,
+                             [&](ImageId image_id, Image& image) {
+                                 image_ids.push_back(image_id);
+                             });
         for (const auto& cache_id : image_ids) {
             view_mip = -1;
             view_slice = -1;

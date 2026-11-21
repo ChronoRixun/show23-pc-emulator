@@ -814,8 +814,12 @@ void Runtime::FlushBarriers() {
         resource.read_ranges.Clear();
         resource.write_ranges.Clear();
     }
-    resources.clear();
-    resource = nullptr;
+    // Keep the emptied entries so their range lists are not freed and reallocated around every
+    // barrier flush; an entry with empty lists reports the same as a missing one.
+    if (resources.size() > 32) {
+        resources.clear();
+        resource = nullptr;
+    }
 }
 
 void Runtime::MakeCurrent(const VideoCore::Buffer* handle) {

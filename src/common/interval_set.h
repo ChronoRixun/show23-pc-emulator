@@ -64,6 +64,20 @@ public:
             return;
         }
 
+        // A plain interval that is already covered changes nothing; skip the split and re-merge.
+        if constexpr (std::is_same_v<IV, Interval>) {
+            // Strictly past the last interval: a plain append, nothing to split or merge.
+            if (intervals.empty() || intervals.back().end < value.start) {
+                intervals.push_back(value);
+                return;
+            }
+            const auto covering = std::ranges::upper_bound(intervals, value.start, {}, &IV::end);
+            if (covering != intervals.end() && covering->start <= value.start &&
+                value.end <= covering->end) {
+                return;
+            }
+        }
+
         IV out[3];
         std::size_t m = 0;
 
