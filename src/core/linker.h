@@ -151,7 +151,8 @@ public:
     void* AllocateTlsForThread(bool is_primary);
     void FreeTlsForNonPrimaryThread(void* pointer);
 
-    s32 LoadModule(const std::filesystem::path& elf_name, bool is_dynamic = false);
+    s32 LoadModule(const std::filesystem::path& elf_name, bool is_dynamic = false,
+                   std::unique_ptr<Core::FileSys::IFile> handle = {});
     s32 LoadAndStartModule(const std::filesystem::path& path, u64 args, const void* argp,
                            int* pRes);
     Module* FindByAddress(VAddr address);

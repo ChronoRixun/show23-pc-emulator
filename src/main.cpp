@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -54,6 +55,7 @@ int main(int argc, char* argv[]) {
 
     // ---- CLI state ----
     std::optional<std::string> gamePath;
+    std::optional<std::filesystem::path> local_ca;
     std::vector<std::string> gameArgs;
     std::optional<std::filesystem::path> overrideRoot;
     std::optional<int> waitPid;
@@ -77,6 +79,8 @@ int main(int argc, char* argv[]) {
     static std::vector<std::string> env_vars;
 
     // ---- Options ----
+    app.add_option("--show23-local-ca", local_ca, "Play using the local service and its public CA")
+        ->check(CLI::ExistingFile);
     app.add_option("guest_arg", gamePath, "Game path or ID"); // positional
     app.add_option("-g,--game", gamePath, "Game path or ID");
     app.add_option("-p,--patch", patchFile, "Patch file to apply");
@@ -145,6 +149,13 @@ int main(int argc, char* argv[]) {
         return app.exit(e);
     }
 
+    if (local_ca) {
+        if (!gamePath || bigPicture || addGameFolder || setAddonFolder || patchFile || !mounts.empty()) {
+            std::fprintf(stderr, "Local mode requires a game and cannot use alternate mounts or patches\n");
+            return 1;
+        }
+        Show23::RequestLocal(*local_ca);
+    }
     if (waitPid)
         Core::Debugger::WaitForPid(*waitPid);
 

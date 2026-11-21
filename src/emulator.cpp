@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <algorithm>
 #include <ctime>
 #include <filesystem>
@@ -393,6 +394,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
 
     // Load param.sfo details if it exists
     std::string id;
+    bool matching_title = false;
     std::string title;
     std::string app_version;
     u32 sdk_version;
@@ -412,6 +414,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         } else if (title_id.has_value()) {
             id = *title_id;
         }
+        matching_title = title_id && *title_id == "CUSA35521" && id == "CUSA35521";
         title = param_sfo->GetString("TITLE").value_or("Unknown title");
         fw_version = param_sfo->GetInteger("SYSTEM_VER").value_or(0x4700000);
         app_version = param_sfo->GetString("APP_VER").value_or("Unknown version");
@@ -443,6 +446,16 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         }
     }
 
+    std::unique_ptr<FileSys::IFile> verified_main;
+    if (Show23::LocalRequested() || id == "CUSA35521" || matching_title) {
+        if (!matching_title || app_version != "01.00") {
+            Show23::Refuse("CUSA35521 version 01.00 is required");
+        }
+        if (!mounts.empty() || !MemoryPatcher::patch_file.empty()) {
+            Show23::Refuse("custom mounts and executable patches are incompatible with verified boot");
+        }
+        verified_main = Show23::VerifyMain(mnt->Open("/app0/" + eboot_name.generic_string(), false));
+    }
     EmulatorSettings.Load(id);
     // Switch to configured log
     Common::Log::Switch((!id.empty() && EmulatorSettings.IsLogSeparate()) ? id + ".log"
@@ -690,7 +703,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
 
     std::jthread init_thread{[&, this]() {
         // Load the module with the linker.
-        if (linker->LoadModule(guest_eboot_path) == -1) {
+        if (linker->LoadModule(guest_eboot_path, false, std::move(verified_main)) == -1) {
             LOG_CRITICAL(Loader, "Failed to load game's eboot.bin: {}", guest_eboot_path);
             std::quick_exit(0);
         }
@@ -771,6 +784,10 @@ void Emulator::Restart(std::filesystem::path eboot_path,
         args.push_back(Common::FS::PathToUTF8String(game_path));
     }
 
+    if (Show23::LocalRequested()) {
+        args.push_back("--show23-local-ca");
+        args.push_back(Common::FS::PathToUTF8String(Show23::LocalCaPath()));
+    }
     if (FileSys::MntPoints::ignore_game_patches) {
         args.push_back("--ignore-game-patch");
     }

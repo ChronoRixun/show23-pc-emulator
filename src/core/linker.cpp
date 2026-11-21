@@ -217,12 +217,12 @@ void Linker::Execute(const std::vector<std::string>& args) {
     });
 }
 
-s32 Linker::LoadModule(const std::filesystem::path& elf_name, bool is_dynamic) {
+s32 Linker::LoadModule(const std::filesystem::path& elf_name, bool is_dynamic,
+                       std::unique_ptr<Core::FileSys::IFile> handle) {
     std::scoped_lock lk{mutex};
     auto* mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
     const std::string as_guest = elf_name.generic_string();
-    std::unique_ptr<Core::FileSys::IFile> handle;
-    if (!as_guest.empty() && as_guest.front() == '/') {
+    if (!handle && !as_guest.empty() && as_guest.front() == '/') {
         handle = mnt->Open(as_guest, /*writable=*/false);
     }
     if (!handle) {

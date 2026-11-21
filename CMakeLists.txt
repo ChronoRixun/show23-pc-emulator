@@ -1010,6 +1010,7 @@ set(CORE src/core/aerolib/stubs.cpp
          src/core/debug_state.h
          src/core/debugger.cpp
          src/core/debugger.h
+         src/core/show23.cpp
          src/core/linker.cpp
          src/core/linker.h
          src/core/memory.cpp
