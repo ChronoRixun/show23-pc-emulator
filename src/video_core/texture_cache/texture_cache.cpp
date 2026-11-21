@@ -382,15 +382,6 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
                 image_info.guest_size > cache_image.info.guest_size &&
                 !cache_image.info.resources.Contains(image_info.resources) &&
                 IsVulkanFormatCompatible(cache_image.info.pixel_format, image_info.pixel_format)) {
-                static u64 Show23::Enabled()_count = 0;
-                if (Show23::Enabled()_count++ < 20) {
-                    LOG_ERROR(Render_Vulkan,
-                              "[SCOUT] kept a GPU-drawn image at {:#x} ({}x{}, {} mips) and "
-                              "expanded it to {} mips instead of discarding it",
-                              image_info.guest_address, image_info.size.width,
-                              image_info.size.height, cache_image.info.resources.levels,
-                              image_info.resources.levels);
-                }
                 return {ExpandImage(image_info, cache_image_id), -1, -1};
             }
         }

@@ -381,6 +381,9 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     }
 
     if (eboot_name.empty()) {
+        if (Show23::LocalRequested()) {
+            Show23::Refuse("could not resolve the main executable");
+        }
         LOG_ERROR(Common_Filesystem, "Failed to derive executable path {} relative to {}",
                   Common::FS::PathToUTF8String(file), Common::FS::PathToUTF8String(game_folder));
         return;
@@ -404,11 +407,19 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
 
     if (auto psf_handle = mnt->Open("/app0/sce_sys/param.sfo", /*writable=*/false)) {
         auto* param_sfo = Common::Singleton<PSF>::Instance();
-        ASSERT_MSG(param_sfo->Open(psf_handle), "Failed to open param.sfo");
+        const bool opened = param_sfo->Open(psf_handle);
+        if (!opened && Show23::LocalRequested()) {
+            Show23::Refuse("local mode requires a readable title metadata file");
+        }
+        ASSERT_MSG(opened, "Failed to open param.sfo");
         param_sfo_exists = true;
 
         const auto content_id = param_sfo->GetString("CONTENT_ID");
         const auto title_id = param_sfo->GetString("TITLE_ID");
+        if (content_id && !content_id->empty() && content_id->size() < 16 &&
+            (Show23::LocalRequested() || (title_id && *title_id == "CUSA35521"))) {
+            Show23::Refuse("invalid content identifier in title metadata");
+        }
         if (content_id.has_value() && !content_id->empty()) {
             id = std::string(*content_id, 7, 9);
         } else if (title_id.has_value()) {

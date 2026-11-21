@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
 #include "core/show23.h"
 #include "common/debug.h"
 #include "core/debug_state.h"
@@ -328,6 +329,10 @@ bool Rasterizer::SkipOversizedGroup(u32 x, u32 y, u32 z, u32 fold) {
         return false;
     }
     if (!warned_oversized_group) {
+        if (!Common::Log::ShouldLog(Common::Log::Class::Render_Vulkan, Common::Log::Level::Warning)) {
+            std::fprintf(stderr, "Warning: skipping unsupported compute group %ux%ux%u for CUSA35521\n",
+                         x, y, z);
+        }
         LOG_WARNING(Render_Vulkan, "Skipping unsupported compute group {}x{}x{} for CUSA35521", x, y, z);
         warned_oversized_group = true;
     }
