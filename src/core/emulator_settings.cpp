@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
@@ -355,6 +356,30 @@ void EmulatorSettingsImpl::MigrateNetworkKeys(const json& general, const json& n
 bool EmulatorSettingsImpl::Load(const std::string& serial) {
     // A newly loaded profile replaces, rather than extends, the previous profile.
     ClearGameSpecificOverrides();
+    if (serial == "CUSA35521" && Show23::Enabled()) {
+        m_gpu.readbacks_mode.set(GpuReadbacksMode::Precise, true);
+        m_gpu.submit_draw_interval.set(128, true);
+        m_gpu.direct_memory_access_enabled.set(false, true);
+        m_gpu.dump_shaders.set(false, true);
+        m_general.redzone_patches.set(true, true);
+        m_general.show_fps_counter.set(true, true);
+        m_vulkan.pipeline_cache_enabled.set(true, true);
+        m_vulkan.vkhost_markers.set(false, true);
+        m_network.connected_to_network.set(Show23::LocalRequested(), true);
+        m_network.shad_net_enabled.set(false, true);
+        m_log.sync.set(false, true);
+        std::string filter = "*:critical Tty:info Config:info Render.Vulkan:error Debug:critical";
+        if (Show23::LocalRequested()) {
+            filter += " Lib.Net:debug Lib.NetCtl:debug Lib.NpAuth:debug Lib.NpManager:debug"
+                      " Lib.NpCommon:debug Lib.NpCommerce:debug Lib.NpWebApi:debug"
+                      " Lib.NpWebApi2:debug Lib.NpProfileDialog:debug Lib.Http:debug"
+                      " Lib.Http2:debug Lib.Ssl:debug Lib.Ssl2:debug Lib.UserService:info"
+                      " Lib.SystemService:info Lib.CommonDlg:debug Lib.MsgDlg:debug"
+                      " Lib.ErrorDialog:debug Core.Linker:error";
+        }
+        m_log.filter.set(filter, true);
+    }
+
 
     try {
         if (serial.empty()) {
