@@ -421,6 +421,33 @@ static bool HasLoopbackPeer(NativeSocket socket) {
            LoopbackPeer(reinterpret_cast<const sockaddr*>(&peer), len);
 }
 
+// Winsock can implicitly bind an unconnected datagram socket to the wildcard address.
+static bool EnsureLocalDatagramEndpoint(NativeSocket s) {
+    int type{};
+    socklen_t opt_len = sizeof(type);
+    if (getsockopt(s, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&type), &opt_len) != 0) {
+        return false;
+    }
+    if (type != SOCK_DGRAM) {
+        return true;
+    }
+    sockaddr_in endpoint{};
+    socklen_t len = sizeof(endpoint);
+    const auto* raw = reinterpret_cast<const sockaddr*>(&endpoint);
+    if (getsockname(s, reinterpret_cast<sockaddr*>(&endpoint), &len) == 0 && endpoint.sin_port) {
+        return LoopbackPeer(raw, len);
+    }
+    endpoint = {};
+    endpoint.sin_family = AF_INET;
+    endpoint.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(s, raw, sizeof(endpoint)) == 0) {
+        return true;
+    }
+    len = sizeof(endpoint);
+    return getsockname(s, reinterpret_cast<sockaddr*>(&endpoint), &len) == 0 &&
+           LoopbackPeer(raw, len);
+}
+
 Error Bind(NativeSocket s, const sockaddr* addr, socklen_t len) {
     sockaddr_in local{};
     if (Show23::LocalRequested() && !LoopbackPeer(addr, len)) {
@@ -528,7 +555,8 @@ NativeSocket Accept(NativeSocket s, sockaddr* addr, socklen_t* len, Error* error
 
 IoResult SendTo(NativeSocket s, const void* buf, size_t len, int flags, const sockaddr* addr,
                 socklen_t addr_len) {
-    if (Show23::LocalRequested() && !(addr ? LoopbackPeer(addr, addr_len) : HasLoopbackPeer(s))) {
+    if (Show23::LocalRequested() &&
+        (!(addr ? LoopbackPeer(addr, addr_len) : HasLoopbackPeer(s)) || !EnsureLocalDatagramEndpoint(s))) {
         return {-1, Error::NetUnreach};
     }
 #ifdef MSG_NOSIGNAL
@@ -552,6 +580,9 @@ IoResult SendTo(NativeSocket s, const void* buf, size_t len, int flags, const so
 
 IoResult RecvFrom(NativeSocket s, void* buf, size_t len, int flags, sockaddr* addr,
                   socklen_t* addr_len) {
+    if (Show23::LocalRequested() && !EnsureLocalDatagramEndpoint(s)) {
+        return {-1, Error::NetUnreach};
+    }
 #ifdef _WIN32
     const int n_len = static_cast<int>(std::min<size_t>(len, INT_MAX));
     char* p = static_cast<char*>(buf);

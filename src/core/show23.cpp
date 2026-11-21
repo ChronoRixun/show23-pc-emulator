@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23_boot.h"
 #include "core/show23.h"
 
 #include <algorithm>
@@ -26,11 +27,12 @@ std::atomic<VAddr> local_main{};
 
 class VerifiedFile final : public Core::FileSys::IFile {
 public:
-    explicit VerifiedFile(std::vector<u8> data) : bytes{std::move(data)} {}
+    explicit VerifiedFile(std::vector<u8> data)
+        : bytes{std::make_shared<const std::vector<u8>>(std::move(data))} {}
     s64 Read(void* dst, u64 size) override {
-        const size_t count = std::min<u64>(size, bytes.size() - position);
+        const size_t count = std::min<u64>(size, bytes->size() - position);
         if (count) {
-            std::memcpy(dst, bytes.data() + position, count);
+            std::memcpy(dst, bytes->data() + position, count);
             position += count;
         }
         return count;
@@ -38,23 +40,33 @@ public:
     s64 Write(const void*, u64) override { return -1; }
     bool Seek(s64 offset, Common::FS::SeekOrigin origin) override {
         using enum Common::FS::SeekOrigin;
-        const s64 base = origin == SetOrigin ? 0 : origin == End ? bytes.size() : position;
-        if (offset < -base || offset > static_cast<s64>(bytes.size()) - base) {
+        const s64 base = origin == SetOrigin ? 0 : origin == End ? static_cast<s64>(bytes->size()) : static_cast<s64>(position);
+        if (offset < -base || offset > static_cast<s64>(bytes->size()) - base) {
             return false;
         }
         position = base + offset;
         return true;
     }
     u64 Tell() const override { return position; }
-    u64 Size() const override { return bytes.size(); }
+    u64 Size() const override { return bytes->size(); }
     bool Flush() override { return true; }
     bool IsOpen() const override { return true; }
 
 private:
-    std::vector<u8> bytes;
+    std::shared_ptr<const std::vector<u8>> bytes;
     size_t position{};
 };
 } // namespace
+
+void BeginBoot() {
+    enabled = false;
+    local_main = 0;
+}
+
+std::unique_ptr<Core::FileSys::IFile> InspectMain(const Core::FileSys::IFile& verified_main) {
+    const auto& snapshot = static_cast<const VerifiedFile&>(verified_main);
+    return std::make_unique<VerifiedFile>(snapshot);
+}
 
 void RequestLocal(std::filesystem::path path) {
     if (path.empty()) {
@@ -156,7 +168,7 @@ void InstallLocalTrust(VAddr base, u64 bytes_from_record) {
     std::fprintf(stderr, "MLB The Show 23: %s\n", reason);
     std::fflush(stderr);
     LOG_CRITICAL(Loader, "MLB The Show 23: {}", reason);
-    std::exit(EXIT_FAILURE);
+    std::quick_exit(EXIT_FAILURE);
 }
 
 std::unique_ptr<Core::FileSys::IFile> VerifyMain(std::unique_ptr<Core::FileSys::IFile> file) {

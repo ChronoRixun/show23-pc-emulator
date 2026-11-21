@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23_boot.h"
 #include "core/show23.h"
 #include <algorithm>
 #include <ctime>
@@ -117,10 +118,10 @@ void Emulator::Shutdown() {
     exit_done = true;
 }
 
-s32 ReadCompiledSdkVersion(const std::string& guest_or_host_path) {
+s32 ReadCompiledSdkVersion(const std::string& guest_or_host_path,
+                           std::unique_ptr<FileSys::IFile> handle = {}) {
     auto* mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
-    std::unique_ptr<Core::FileSys::IFile> handle;
-    if (!guest_or_host_path.empty() && guest_or_host_path.front() == '/') {
+    if (!handle && !guest_or_host_path.empty() && guest_or_host_path.front() == '/') {
         handle = mnt->Open(guest_or_host_path, /*writable=*/false);
     }
 
@@ -292,6 +293,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
                    std::optional<std::filesystem::path> p_game_folder,
                    std::vector<std::pair<std::filesystem::path, std::string>> mounts,
                    std::vector<std::string> const& env_vars, bool append_log) {
+    Show23::BeginBoot();
     Common::SetCurrentThreadName("shadPS4:Main");
     if (waitForDebuggerBeforeRun) {
         Debugger::WaitForDebuggerAttach();
@@ -485,7 +487,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     game_info.app_ver = app_version;
     game_info.firmware_ver = fw_version & 0xFFF00000;
     game_info.raw_firmware_ver = fw_version;
-    game_info.sdk_ver = ReadCompiledSdkVersion(guest_eboot_path);
+    game_info.sdk_ver = ReadCompiledSdkVersion(guest_eboot_path, verified_main ? Show23::InspectMain(*verified_main) : nullptr);
     game_info.psf_attributes = psf_attributes;
 
     if (auto splash = mnt->ReadFile("/app0/sce_sys/pic1.png")) {

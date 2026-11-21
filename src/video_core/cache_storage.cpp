@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "video_core/amdgpu/resource.h"
 #include "core/show23.h"
 #include "common/elf_info.h"
 #include "common/io_file.h"
@@ -96,7 +97,9 @@ void DataBase::Open() {
     const auto& game_info = Common::ElfInfo::Instance();
 
     using namespace Common::FS;
-    const auto cache_name = Show23::Enabled() ? std::string{"CUSA35521-clean-v1"}
+    const auto cache_name = Show23::Enabled() ? fmt::format("CUSA35521-clean-v1-{}-{}",
+                                                        AmdGpu::host_max_array_layers,
+                                                        AmdGpu::host_max_volume_depth)
                                               : std::string{game_info.GameSerial()};
     if (EmulatorSettings.IsPipelineCacheArchived()) {
         mz_zip_zero_struct(&zip_ar);
