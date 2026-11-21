@@ -12,6 +12,8 @@ class IFile;
 }
 
 namespace Show23 {
+// Legacy wire identity and authorization code shared with the local server.
+// Rename these values together with the server in a later protocol change.
 inline constexpr const char* LocalOnlineId = "ScoutLocal";
 inline constexpr u64 LocalAccountId = 0x0123456789abcdefULL;
 inline constexpr const char* LocalAuthCode = "ScoutLocalAuthCode0001";
