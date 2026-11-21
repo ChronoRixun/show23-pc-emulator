@@ -498,7 +498,9 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         if (!stage) {
             continue;
         }
-        set_writes.resize(set_writes.size() + stage->buffers.size() + stage->images.size() +
+        const size_t buffer_writes = Show23::Enabled() && !stage->buffers.empty()
+                                         ? 1 : stage->buffers.size();
+        set_writes.resize(set_writes.size() + buffer_writes + stage->images.size() +
                           stage->samplers.size());
         BindBuffers(*stage, binding, push_data);
         BindTextures(*stage, binding);
@@ -832,6 +834,11 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
 void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
                              Shader::PushData& push_data) {
     const u64 alignment = instance.StorageMinAlignment();
+    if (stage.buffers.empty()) {
+        return;
+    }
+    const auto first_info = buffer_infos.size();
+    const u32 count = static_cast<u32>(stage.buffers.size());
     for (const auto& desc : stage.buffers) {
         const auto src_access =
             vk::AccessFlagBits2::eShaderRead |
@@ -921,14 +928,19 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             }
         }
 
+        ++binding.buffer;
+    }
+
+    const u32 stride = Show23::Enabled() ? count : 1;
+    for (u32 i = 0; i < count; i += stride) {
         auto& set_write = set_writes[set_write_index++];
         set_write.dstSet = VK_NULL_HANDLE;
-        set_write.dstBinding = binding.unified++;
+        set_write.dstBinding = binding.unified;
         set_write.dstArrayElement = 0;
-        set_write.descriptorCount = 1;
+        set_write.descriptorCount = stride;
         set_write.descriptorType = vk::DescriptorType::eStorageBuffer;
-        set_write.pBufferInfo = &buffer_infos.back();
-        ++binding.buffer;
+        set_write.pBufferInfo = &buffer_infos[first_info + i];
+        binding.unified += stride;
     }
 }
 
