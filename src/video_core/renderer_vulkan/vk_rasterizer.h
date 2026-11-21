@@ -161,11 +161,29 @@ private:
         VideoCore::ImageId image_id;
         VideoCore::TextureCache::ImageDesc desc;
     };
-    std::array<ImageBinding, Shader::NUM_IMAGES> image_bindings;
+    std::array<ImageBinding, Shader::MAX_IMAGE_BINDINGS> image_bindings;
+    struct TableCache {
+        std::vector<u32> words;
+        std::vector<ImageBinding> bindings;
+        u64 generation{};
+        u64 last_used{};
+        u32 flags{};
+    };
+    std::array<TableCache, 4> table_caches;
+    u64 table_clock{};
+    struct DescCacheEntry {
+        AmdGpu::Image sharp;
+        u32 flags;
+        bool valid;
+        VideoCore::TextureCache::ImageDesc desc;
+    };
+    std::unique_ptr<std::array<DescCacheEntry, 2048>> description_cache =
+        std::make_unique<std::array<DescCacheEntry, 2048>>();
+
     std::array<ImageBinding, AmdGpu::NUM_COLOR_BUFFERS> cb_descs;
     ImageBinding db_desc;
 
-    boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
+    boost::container::static_vector<vk::DescriptorImageInfo, Shader::MAX_IMAGE_BINDINGS> image_infos;
     boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
 
     struct BoundBuffer {

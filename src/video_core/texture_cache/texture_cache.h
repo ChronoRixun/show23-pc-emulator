@@ -183,6 +183,12 @@ public:
                                          AmdGpu::BorderColorBuffer border_color_base,
                                          bool is_depth);
 
+    /// Changes whenever an image is registered or unregistered, which is when a FindImage
+    /// result remembered from an earlier draw may stop being what FindImage would return now.
+    [[nodiscard]] u64 RegistrationGeneration() const noexcept {
+        return registration_generation;
+    }
+
     /// Retrieves the image with the specified id.
     [[nodiscard]] Image& GetImage(ImageId id) {
         auto& image = slot_images[id];
@@ -425,6 +431,7 @@ private:
     u64 pressure_gc_samplers = 0;
     u64 critical_gc_samplers = 0;
     u64 gc_tick = 0;
+    u64 registration_generation = 0;
     Common::LRUCache<Image> image_lru_cache;
     Common::LRUCache<Sampler> sampler_lru_cache;
     const bool readback_linear_images;

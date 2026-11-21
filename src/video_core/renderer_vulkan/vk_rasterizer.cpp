@@ -942,6 +942,93 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         const auto tsharp = image_desc.GetSharp(stage);
         const auto data_fmt = tsharp.GetDataFmt();
         const auto num_fmt = tsharp.GetNumberFmt();
+        if (image_desc.is_table) {
+            // The shader picks an entry of a descriptor table per pixel, so every entry is
+            // bound, in order, as one element of an image array. Entries that are empty,
+            // invalid or of a different kind than the array was declared with stay null.
+            const u32 num_entries = image_desc.NumBindings(stage);
+            const auto declared_type = tsharp.GetViewType(image_desc.is_array);
+            ASSERT_MSG(num_images + num_entries <= image_bindings.size() &&
+                           image_infos.size() + num_images + num_entries <= image_infos.capacity(),
+                       "Too many image bindings with a descriptor table in shader {:#x}",
+                       stage.pgm_hash);
+            // Resolving about a thousand entries on every draw is the expensive part, and the
+            // result only depends on the table words and on which images are registered, so it
+            // is kept and reused while both are unchanged. What is drawn is the same either way.
+            const u32* table_words =
+                stage.flattened_ud_buf.data() + image_desc.sharp_fetch.offsets[0];
+            const size_t table_dwords = size_t(num_entries) * Shader::SHARP_TABLE_ENTRY_DWORDS;
+            const u32 table_flags = u32(image_desc.is_depth) | (u32(image_desc.is_written) << 1) |
+                                    (u32(image_desc.is_array) << 2);
+            const u64 generation_before = texture_cache.RegistrationGeneration();
+            TableCache* cache_hit = nullptr;
+            TableCache* cache_victim = &table_caches[0];
+            for (auto& cached : table_caches) {
+                if (cached.flags == table_flags && cached.generation == generation_before &&
+                    cached.words.size() == table_dwords &&
+                    std::memcmp(cached.words.data(), table_words,
+                                table_dwords * sizeof(u32)) == 0) {
+                    cache_hit = &cached;
+                    break;
+                }
+                if (cached.last_used < cache_victim->last_used) {
+                    cache_victim = &cached;
+                }
+            }
+            if (cache_hit) {
+                cache_hit->last_used = ++table_clock;
+                const u64 tick = scheduler.CurrentTick();
+                for (u32 entry = 0; entry < num_entries; ++entry) {
+                    auto& slot = image_bindings[num_images++];
+                    slot = cache_hit->bindings[entry];
+                    if (!slot.image_id) {
+                        continue;
+                    }
+                    auto& image = texture_cache.GetImage(slot.image_id);
+                    image.tick_accessed_last = tick;
+                    if (!slot.desc.IsSubrectTexture(image.info)) {
+                        image.binding.is_bound = 1u;
+                    }
+                }
+            } else {
+                const u32 first_entry_slot = num_images;
+                for (u32 entry = 0; entry < num_entries; ++entry) {
+                    auto& [image_id, desc] = image_bindings[num_images++];
+                    image_id = {};
+                    desc.type = VideoCore::TextureCache::BindingType::Texture;
+                    const auto entry_sharp = image_desc.GetSharpAt(stage, entry);
+                    const auto entry_data_fmt = entry_sharp.GetDataFmt();
+                    if (entry_sharp.Address() == 0 ||
+                        entry_data_fmt == AmdGpu::DataFormat::FormatInvalid ||
+                        !magic_enum::enum_contains(entry_data_fmt) ||
+                        !magic_enum::enum_contains(entry_sharp.GetNumberFmt()) ||
+                        entry_sharp.GetViewType(image_desc.is_array) != declared_type ||
+                        !memory->IsValidGpuMapping(entry_sharp.Address(), 0)) {
+                        continue;
+                    }
+                    std::construct_at(&desc, entry_sharp, image_desc);
+                    image_id = texture_cache.FindImage(desc);
+                    auto* image = &texture_cache.GetImage(image_id);
+                    if (desc.IsSubrectTexture(image->info)) {
+                        continue;
+                    }
+                    image->binding.is_bound = 1u;
+                }
+                // If resolving created or removed an image, an entry resolved earlier in the loop
+                // may already be out of date; keep the result only when nothing moved.
+                if (texture_cache.RegistrationGeneration() == generation_before) {
+                    cache_victim->words.assign(table_words, table_words + table_dwords);
+                    cache_victim->bindings.assign(
+                        image_bindings.begin() + first_entry_slot,
+                        image_bindings.begin() + first_entry_slot + num_entries);
+                    cache_victim->generation = generation_before;
+                    cache_victim->flags = table_flags;
+                    cache_victim->last_used = ++table_clock;
+                }
+            }
+            image_descriptor_array_sizes.push_back(num_entries);
+            continue;
+        }
         if (tsharp.Address() == 0 || data_fmt == AmdGpu::DataFormat::FormatInvalid) {
             image_bindings[num_images++].image_id = {};
             image_descriptor_array_sizes.push_back(1);
@@ -965,7 +1052,26 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
         for (auto i = 0; i < num_bindings; i++) {
             auto& [image_id, desc] = image_bindings[num_images++];
-            std::construct_at(&desc, tsharp, image_desc);
+            // The description is a pure function of the T# and three flags of the resource,
+            // so reuse the last one built for the same inputs instead of recomputing the mip
+            // layout on every bind.
+            const u32 flags = u32(image_desc.is_depth) | (u32(image_desc.is_written) << 1) |
+                              (u32(image_desc.is_array) << 2);
+            u64 words[4];
+            std::memcpy(words, &tsharp, sizeof(words));
+            u64 hash = (words[0] ^ flags) * 0x9E3779B97F4A7C15ULL;
+            hash = (hash ^ (hash >> 29) ^ words[1]) * 0xBF58476D1CE4E5B9ULL;
+            hash = (hash ^ (hash >> 31) ^ words[2]) * 0x94D049BB133111EBULL;
+            hash = (hash ^ (hash >> 30) ^ words[3]) * 0x9E3779B97F4A7C15ULL;
+            auto& entry = (*description_cache)[(hash >> 40) & 2047];
+            if (!entry.valid || entry.flags != flags ||
+                std::memcmp(&entry.sharp, &tsharp, sizeof(tsharp)) != 0) {
+                std::construct_at(&entry.desc, tsharp, image_desc);
+                entry.sharp = tsharp;
+                entry.flags = flags;
+                entry.valid = true;
+            }
+            desc = entry.desc;
 
             if (mip_fallback_mode == Shader::MipStorageFallbackMode::ConstantIndex) {
                 ASSERT(num_bindings == 1);

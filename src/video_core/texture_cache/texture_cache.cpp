@@ -956,6 +956,7 @@ void TextureCache::RegisterImage(ImageId image_id) {
     Image& image = slot_images[image_id];
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered),
                "Trying to register an already registered image");
+    ++registration_generation;
     image.flags |= ImageFlagBits::Registered;
     image.memory_usage_counter = &total_used_memory;
     total_used_memory += Common::AlignUp(image.SizeBytes(), 1024);
@@ -975,6 +976,7 @@ void TextureCache::UnregisterImage(ImageId image_id) {
     Image& image = slot_images[image_id];
     ASSERT_MSG(True(image.flags & ImageFlagBits::Registered),
                "Trying to unregister an already unregistered image");
+    ++registration_generation;
     image.flags &= ~ImageFlagBits::Registered;
     image.memory_usage_counter = nullptr;
     image_lru_cache.Free(image);
