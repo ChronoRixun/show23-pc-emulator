@@ -111,7 +111,11 @@ void SharedMemoryToStoragePass(IR::Program& program, const RuntimeInfo& runtime_
     //   * Workgroup explicit memory is not supported and multiple shared memory types are used.
     const u32 shared_memory_size = runtime_info.hw.cs.shared_memory_size;
     const auto used_types = CalculateSharedMemoryTypes(program);
-    if (used_types == IR::Type::Void || (shared_memory_size <= profile.max_shared_memory_size &&
+    // A folded thread group spans several host groups, so its shared memory has to live in a
+    // storage buffer that all of them see.
+    const bool folded = runtime_info.hw.cs.FoldZ() > 1;
+    if (used_types == IR::Type::Void || (!folded &&
+                                         shared_memory_size <= profile.max_shared_memory_size &&
                                          (profile.supports_workgroup_explicit_memory_layout ||
                                           std::popcount(static_cast<u32>(used_types)) == 1))) {
         return;

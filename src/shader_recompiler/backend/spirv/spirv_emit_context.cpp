@@ -299,7 +299,10 @@ void EmitContext::DefineWorkgroupIndex() {
     const Id workgroup_id_val{OpLoad(U32[3], workgroup_id)};
     const Id workgroup_x{OpCompositeExtract(U32[1], workgroup_id_val, 0)};
     const Id workgroup_y{OpCompositeExtract(U32[1], workgroup_id_val, 1)};
-    const Id workgroup_z{OpCompositeExtract(U32[1], workgroup_id_val, 2)};
+    Id workgroup_z{OpCompositeExtract(U32[1], workgroup_id_val, 2)};
+    if (const u32 fold = runtime_info.hw.cs.FoldZ(); fold > 1) {
+        workgroup_z = OpUDiv(U32[1], workgroup_z, ConstU32(fold));
+    }
     const Id num_workgroups{OpLoad(U32[3], num_workgroups_id)};
     const Id num_workgroups_x{OpCompositeExtract(U32[1], num_workgroups, 0)};
     const Id num_workgroups_y{OpCompositeExtract(U32[1], num_workgroups, 1)};
@@ -495,7 +498,10 @@ void EmitContext::DefineInputs() {
     }
     case SwStage::Compute:
         if (info.loads.GetAny(IR::Attribute::WorkgroupIndex) ||
-            info.loads.GetAny(IR::Attribute::WorkgroupId)) {
+            info.loads.GetAny(IR::Attribute::WorkgroupId) ||
+            (runtime_info.hw.cs.FoldZ() > 1 &&
+             (info.loads.GetAny(IR::Attribute::LocalInvocationId) ||
+              info.loads.Get(IR::Attribute::LocalInvocationIndex)))) {
             workgroup_id =
                 DefineVariable(U32[3], spv::BuiltIn::WorkgroupId, spv::StorageClass::Input);
         }
@@ -1051,7 +1057,11 @@ void EmitContext::DefineSharedMemory() {
         return;
     }
 
-    info.shared_guest_segment.size = runtime_info.hw.cs.shared_memory_size;
+    // Shared memory that was moved to a storage buffer leaves no shared accesses behind, so
+    // there is no workgroup variable to declare for it.
+    if (static_cast<u64>(info.shared_guest_segment.used_types) != 0) {
+        info.shared_guest_segment.size = runtime_info.hw.cs.shared_memory_size;
+    }
 
     const auto make_type = [&](IR::Type type, Id element_type, u32 element_size,
                                std::string_view name, u32 offset, u32 segment_size) -> SharedSpv {

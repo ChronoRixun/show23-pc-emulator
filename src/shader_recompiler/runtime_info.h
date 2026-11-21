@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include "core/show23.h"
 #include <span>
 #include "common/types.h"
 #include "shader_recompiler/frontend/tessellation.h"
@@ -250,6 +251,22 @@ struct HwComputeRuntimeInfo {
     u32 shared_memory_size;
     std::array<u32, 3> workgroup_size;
     std::array<bool, 3> tgid_enable;
+
+    /// Largest thread group the host is assumed to accept (maxComputeWorkGroupInvocations on
+    /// current desktop drivers).
+    static constexpr u64 MaxHostGroupInvocations = 1024;
+
+    /// When the guest thread group has more invocations than the host accepts and one X*Y slice
+    /// fits, the host runs each Z slice as its own group: host local size (X, Y, 1), host group
+    /// count Z multiplied by this value. Returns 1 when no folding applies.
+    u32 FoldZ() const noexcept {
+        const u64 slice = u64(workgroup_size[0]) * workgroup_size[1];
+        if (Show23::Enabled() && workgroup_size[2] > 1 && slice <= MaxHostGroupInvocations &&
+            slice * workgroup_size[2] > MaxHostGroupInvocations) {
+            return workgroup_size[2];
+        }
+        return 1;
+    }
 
     bool operator==(const HwComputeRuntimeInfo& other) const noexcept {
         return workgroup_size == other.workgroup_size && tgid_enable == other.tgid_enable;

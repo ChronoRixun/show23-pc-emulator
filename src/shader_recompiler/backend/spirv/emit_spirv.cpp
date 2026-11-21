@@ -396,7 +396,10 @@ void DefineEntryPoint(const Info& info, const RuntimeInfo& runtime_info, EmitCon
     spv::ExecutionModel execution_model{};
     switch (info.sw_stage) {
     case SwStage::Compute: {
-        const std::array<u32, 3> workgroup_size{ctx.runtime_info.hw.cs.workgroup_size};
+        std::array<u32, 3> workgroup_size{ctx.runtime_info.hw.cs.workgroup_size};
+        if (ctx.runtime_info.hw.cs.FoldZ() > 1) {
+            workgroup_size[2] = 1;
+        }
         execution_model = spv::ExecutionModel::GLCompute;
         ctx.AddExecutionMode(main, spv::ExecutionMode::LocalSize, workgroup_size[0],
                              workgroup_size[1], workgroup_size[2]);

@@ -103,6 +103,9 @@ public:
 #endif
 
 private:
+    bool SkipOversizedGroup(u32 x, u32 y, u32 z, u32 fold);
+    bool warned_oversized_group{};
+
     void PrepareRenderState(const GraphicsPipeline* pipeline);
     RenderState BeginRendering(const GraphicsPipeline* pipeline);
     void Resolve();

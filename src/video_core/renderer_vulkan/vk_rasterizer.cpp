@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include "common/debug.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -322,6 +323,17 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     ResetBindings(false);
 }
 
+bool Rasterizer::SkipOversizedGroup(u32 x, u32 y, u32 z, u32 fold) {
+    if (!Show23::Enabled() || u64(x) * y * z <= 1024 || fold != 1) {
+        return false;
+    }
+    if (!warned_oversized_group) {
+        LOG_WARNING(Render_Vulkan, "Skipping unsupported compute group {}x{}x{} for CUSA35521", x, y, z);
+        warned_oversized_group = true;
+    }
+    return true;
+}
+
 void Rasterizer::DispatchDirect() {
     RENDERER_TRACE;
 
@@ -329,6 +341,17 @@ void Rasterizer::DispatchDirect() {
     scheduler.PopPendingOperations();
 
     const auto& cs_program = liverpool->GetCsRegs();
+    // A thread group larger than the host accepts is run as one host group per Z slice when
+    // that fits (see HwComputeRuntimeInfo::FoldZ); the compiled shader maps the ids back.
+    const u32 fold_z = Shader::HwComputeRuntimeInfo{
+        .workgroup_size = {cs_program.num_thread_x.full, cs_program.num_thread_y.full,
+                           cs_program.num_thread_z.full}}
+                           .FoldZ();
+    if (SkipOversizedGroup(cs_program.num_thread_x.full, cs_program.num_thread_y.full,
+                           cs_program.num_thread_z.full, fold_z)) {
+        return;
+    }
+
     const ComputePipeline* pipeline = pipeline_cache.GetComputePipeline();
     if (!pipeline) {
         return;
@@ -352,7 +375,29 @@ void Rasterizer::DispatchDirect() {
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
-    cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
+    cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z * fold_z);
+    if (fold_z > 1) {
+        const bool uses_shared_memory = cs_program.SharedMemSize() != 0;
+        if (uses_shared_memory) {
+            // The guest group shares memory behind a barrier, which separate host groups cannot
+            // wait on. Run the dispatch a second time: the shared buffer then already holds what
+            // every slice wrote, so the part after the barrier reads complete data and its
+            // output replaces the first pass. Exact for one barrier and writes that do not
+            // depend on shared memory; shaders with more barriers would need more passes.
+            const vk::MemoryBarrier2 between_passes = {
+                .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .dstAccessMask =
+                    vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+            };
+            cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+                .memoryBarrierCount = 1,
+                .pMemoryBarriers = &between_passes,
+            });
+            cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z * fold_z);
+        }
+    }
     DebugState.IncDispatch();
 
     ResetBindings(true);
@@ -365,6 +410,11 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     scheduler.PopPendingOperations();
 
     const auto& cs_program = liverpool->GetCsRegs();
+    if (SkipOversizedGroup(cs_program.num_thread_x.full, cs_program.num_thread_y.full,
+                           cs_program.num_thread_z.full, 1)) {
+        return;
+    }
+
     const ComputePipeline* pipeline = pipeline_cache.GetComputePipeline();
     if (!pipeline) {
         return;

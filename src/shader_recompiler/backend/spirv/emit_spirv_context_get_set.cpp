@@ -202,13 +202,35 @@ Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
         return ctx.OpLoad(ctx.U32[1], ctx.base_instance);
     case IR::Attribute::WorkgroupIndex:
         return ctx.workgroup_index_id;
-    case IR::Attribute::WorkgroupId:
-        return ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), comp);
+    case IR::Attribute::WorkgroupId: {
+        const Id value =
+            ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), comp);
+        // With a folded thread group the host group Z counts guest Z slices.
+        if (const u32 fold = ctx.runtime_info.hw.cs.FoldZ(); fold > 1 && comp == 2) {
+            return ctx.OpUDiv(ctx.U32[1], value, ctx.ConstU32(fold));
+        }
+        return value;
+    }
     case IR::Attribute::LocalInvocationId:
+        if (const u32 fold = ctx.runtime_info.hw.cs.FoldZ(); fold > 1 && comp == 2) {
+            const Id host_group_z =
+                ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), 2U);
+            return ctx.OpUMod(ctx.U32[1], host_group_z, ctx.ConstU32(fold));
+        }
         return ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.local_invocation_id),
                                       comp);
-    case IR::Attribute::LocalInvocationIndex:
-        return ctx.OpLoad(ctx.U32[1], ctx.local_invocation_index);
+    case IR::Attribute::LocalInvocationIndex: {
+        const Id value = ctx.OpLoad(ctx.U32[1], ctx.local_invocation_index);
+        if (const u32 fold = ctx.runtime_info.hw.cs.FoldZ(); fold > 1) {
+            const auto& size = ctx.runtime_info.hw.cs.workgroup_size;
+            const Id host_group_z =
+                ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), 2U);
+            const Id slice = ctx.OpUMod(ctx.U32[1], host_group_z, ctx.ConstU32(fold));
+            return ctx.OpIAdd(ctx.U32[1], value,
+                              ctx.OpIMul(ctx.U32[1], slice, ctx.ConstU32(size[0] * size[1])));
+        }
+        return value;
+    }
     case IR::Attribute::SampleIndex:
         return ctx.OpLoad(ctx.U32[1], ctx.sample_index);
     case IR::Attribute::SampleMask:
