@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include "common/logging/log.h"
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/network/http.h"
 #include "core/libraries/network/http2.h"
 
+#include <deque>
 #include <map>
 #include <mutex>
 
@@ -14,6 +16,27 @@ namespace Libraries::Http2 {
 
 std::mutex g_http2_mutex;
 std::map<s32, s32> requests_to_connections{};
+
+// The asynchronous calls were bare stubs, so a caller waited for ever. The request is
+// carried out at once on the calling thread and its completion is queued for sceHttp2WaitAsync.
+// The argument lists and the event layout are taken from how MLB The Show 23 (CUSA35521) uses
+// them, not from documentation: event type 0 = request sent and response headers in, 1 = data
+// read (result = bytes); WaitAsync returns 0 with an event or 0x817b1079 when none is ready.
+struct LocalHttp2Event {
+    s32 type;
+    s32 req_id;
+    s32 result;
+    s32 reserved0;
+    u64 reserved1;
+};
+static std::mutex g_local_event_mutex;
+static std::deque<LocalHttp2Event> g_local_events;
+static constexpr s32 LocalHttp2NoEvent = static_cast<s32>(0x817b1079);
+
+static void QueueLocalEvent(s32 type, s32 req_id, s32 result) {
+    std::scoped_lock lock{g_local_event_mutex};
+    g_local_events.push_back({type, req_id, result, 0, 0});
+}
 
 s32 PS4_SYSV_ABI sceHttp2AbortRequest(s32 req_id) {
     LOG_ERROR(Lib_Http2, "(STUBBED) called");
@@ -215,8 +238,14 @@ s32 PS4_SYSV_ABI sceHttp2ReadData(s32 req_id, void* data, u64 size) {
     return result;
 }
 
-s32 PS4_SYSV_ABI sceHttp2ReadDataAsync() {
-    LOG_ERROR(Lib_Http2, "(STUBBED) called");
+s32 PS4_SYSV_ABI sceHttp2ReadDataAsync(s32 req_id, void* data, u64 size, void* arg4, void* arg5) {
+    if (!Show23::LocalActive()) {
+        LOG_ERROR(Lib_Http2, "(STUBBED) called");
+        return ORBIS_OK;
+    }
+    const s32 result = Libraries::Http::sceHttpReadData(req_id, data, size);
+    LOG_INFO(Lib_Http2, "req_id = {}, size = {}, read {:#x}", req_id, size, result);
+    QueueLocalEvent(1, req_id, result);
     return ORBIS_OK;
 }
 
@@ -239,8 +268,18 @@ s32 PS4_SYSV_ABI sceHttp2SendRequest(s32 req_id, const void* data, u64 size) {
     return result;
 }
 
-s32 PS4_SYSV_ABI sceHttp2SendRequestAsync() {
-    LOG_ERROR(Lib_Http2, "(STUBBED) called");
+s32 PS4_SYSV_ABI sceHttp2SendRequestAsync(s32 req_id, const void* post_data, u64 size, void* arg4,
+                                          void* arg5) {
+    if (!Show23::LocalActive()) {
+        LOG_ERROR(Lib_Http2, "(STUBBED) called");
+        return ORBIS_OK;
+    }
+    const s32 result = Libraries::Http::sceHttpSendRequest(req_id, post_data, size);
+    LOG_INFO(Lib_Http2, "req_id = {}, size = {}, result {:#x}", req_id, size, result);
+    if (result < 0) {
+        return result;
+    }
+    QueueLocalEvent(0, req_id, result);
     return ORBIS_OK;
 }
 
@@ -378,9 +417,25 @@ s32 PS4_SYSV_ABI sceHttp2Term(s32 ctx_id) {
     return result;
 }
 
-s32 PS4_SYSV_ABI sceHttp2WaitAsync() {
-    LOG_ERROR(Lib_Http2, "(STUBBED) called");
-    return ORBIS_OK;
+s32 PS4_SYSV_ABI sceHttp2WaitAsync(s32 req_id, LocalHttp2Event* event, s32* count, u32 timeout) {
+    if (!Show23::LocalActive()) {
+        LOG_ERROR(Lib_Http2, "(STUBBED) called");
+        return ORBIS_OK;
+    }
+    std::scoped_lock lock{g_local_event_mutex};
+    for (auto it = g_local_events.begin(); it != g_local_events.end(); ++it) {
+        if (it->req_id == req_id) {
+            if (event != nullptr) {
+                *event = *it;
+            }
+            if (count != nullptr) {
+                *count = 1;
+            }
+            g_local_events.erase(it);
+            return ORBIS_OK;
+        }
+    }
+    return LocalHttp2NoEvent;
 }
 
 void RegisterLib(Core::Loader::SymbolsResolver* sym) {

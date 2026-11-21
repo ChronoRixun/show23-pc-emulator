@@ -8,6 +8,7 @@
 #include <fmt/format.h>
 #include "common/elf_info.h"
 #include "common/logging/log.h"
+#include "core/show23.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/net/net_p2p.h"
 #include "core/libraries/net/net_upnp.h"
@@ -16,6 +17,7 @@
 #include "core/libraries/np/np_manager.h"
 #include "core/libraries/np/np_matching2/np_matching2_internal.h"
 #include "core/libraries/np/np_matching2/np_matching2_mm.h"
+#include "core/user_manager.h"
 #include "core/user_settings.h"
 #include "imgui/shadnet_notifications_layer.h"
 #include "shadnet.pb.h"
@@ -93,6 +95,9 @@ std::pair<std::string, u16> NpHandler::ParseServerAddress() const {
 }
 
 bool NpHandler::ConnectUserById(s32 user_id) {
+    if (Show23::LocalRequested()) {
+        return false;
+    }
     if (!EmulatorSettings.IsShadNetEnabled())
         return false;
 
@@ -235,6 +240,9 @@ void NpHandler::Shutdown() {
 
 bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, const std::string& npid,
                             const std::string& password, const std::string& token) {
+    if (Show23::LocalRequested()) {
+        return false;
+    }
     LOG_INFO(NpHandler, "Connecting user_id={} npid='{}' to {}:{} (timeout {}s)", user_id, npid,
              host, port, ShadNet::SHAD_CONNECT_TIMEOUT_MS / 1000);
 
@@ -525,13 +533,29 @@ void NpHandler::TryReconnect() {
     }
 }
 
+// The first logged-in local user, or -1.
+static s32 LocalUserId() {
+    for (const User* user : UserManagement.GetLoggedInUsers()) {
+        if (user != nullptr) {
+            return user->user_id;
+        }
+    }
+    return -1;
+}
+
 bool NpHandler::IsPsnSignedIn(s32 user_id) const {
+    if (Show23::LocalActive()) {
+        return UserManagement.GetUserByID(user_id) != nullptr;
+    }
     std::lock_guard lock(m_mutex_clients);
     auto it = m_clients.find(user_id);
     return it != m_clients.end() && it->second->IsAuthenticated();
 }
 
 bool NpHandler::IsAnySignedIn() const {
+    if (Show23::LocalActive()) {
+        return LocalUserId() != -1;
+    }
     std::lock_guard lock(m_mutex_clients);
     for (auto& [_, client] : m_clients)
         if (client->IsAuthenticated())
@@ -540,6 +564,11 @@ bool NpHandler::IsAnySignedIn() const {
 }
 
 OrbisNpId NpHandler::GetNpId(s32 user_id) const {
+    if (Show23::LocalActive()) {
+        OrbisNpId id{};
+        std::strncpy(id.handle.data, Show23::LocalOnlineId, sizeof(id.handle.data));
+        return id;
+    }
     std::lock_guard lock(m_mutex_clients);
     auto it = m_np_ids.find(user_id);
     return it != m_np_ids.end() ? it->second : OrbisNpId{};
@@ -556,6 +585,9 @@ std::string NpHandler::GetAvatarUrl(s32 user_id) const {
 }
 
 OrbisNpAccountId NpHandler::GetAccountId(s32 user_id) const {
+    if (Show23::LocalActive()) {
+        return static_cast<OrbisNpAccountId>(Show23::LocalAccountId);
+    }
     std::lock_guard lock(m_mutex_clients);
     auto it = m_clients.find(user_id);
     return it != m_clients.end() ? static_cast<OrbisNpAccountId>(it->second->GetUserId()) : 0;
@@ -574,6 +606,9 @@ u32 NpHandler::GetLocalIpAddr(s32 user_id) const {
 }
 
 s32 NpHandler::GetUserIdByAccountId(u64 account_id) const {
+    if (Show23::LocalActive()) {
+        return account_id == Show23::LocalAccountId ? LocalUserId() : -1;
+    }
     std::lock_guard lock(m_mutex_clients);
     for (auto& [uid, client] : m_clients) {
         if (static_cast<u64>(client->GetUserId()) == account_id)
@@ -583,6 +618,12 @@ s32 NpHandler::GetUserIdByAccountId(u64 account_id) const {
 }
 
 s32 NpHandler::GetUserIdByOnlineId(const OrbisNpOnlineId& online_id) const {
+    if (Show23::LocalActive()) {
+        return strncmp(online_id.data, Show23::LocalOnlineId,
+                       ORBIS_NP_ONLINEID_MAX_LENGTH) == 0
+                   ? LocalUserId()
+                   : -1;
+    }
     std::lock_guard lock(m_mutex_clients);
     for (auto& [uid, np_id] : m_np_ids) {
         if (strncmp(np_id.handle.data, online_id.data, ORBIS_NP_ONLINEID_MAX_LENGTH) == 0)

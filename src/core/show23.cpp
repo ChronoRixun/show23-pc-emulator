@@ -3,6 +3,7 @@
 #include "core/show23.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -20,8 +21,8 @@
 namespace Show23 {
 namespace {
 std::filesystem::path local_ca;
-bool enabled{};
-VAddr local_main{};
+std::atomic<bool> enabled{};
+std::atomic<VAddr> local_main{};
 
 class VerifiedFile final : public Core::FileSys::IFile {
 public:

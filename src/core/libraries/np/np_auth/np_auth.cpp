@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include "common/logging/log.h"
+#include "core/show23.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
@@ -19,7 +20,10 @@
 
 namespace Libraries::Np::NpAuth {
 
-static bool g_shadnet_enabled = false;
+static bool remote_account_service = false;
+static bool HasAccountService() {
+    return remote_account_service || Show23::LocalActive();
+}
 static std::mutex g_auth_request_mutex;
 static constexpr s32 ORBIS_NP_AUTH_POLL_ASYNC_RET_FINISHED = 0;
 static constexpr s32 ORBIS_NP_AUTH_POLL_ASYNC_RET_RUNNING = 1;
@@ -130,7 +134,14 @@ s32 GetAuthorizationCode(s32 req_id, const OrbisNpAuthGetAuthorizationCodeParame
         return error;
     }
 
-    if (!g_shadnet_enabled) {
+    if (Show23::LocalActive()) {
+        // a fixed code for a local server; nothing is asked of any outside service.
+        ctx->authCode = auth_code;
+        ctx->issuerId = issuer_id;
+        ctx->SetAuthorizationCode(Show23::LocalAuthCode, Show23::LocalIssuerId);
+        return FinishStartedRequest(async, ctx);
+    }
+    if (!HasAccountService()) {
         ctx->SetResult(ORBIS_NP_ERROR_SIGNED_OUT);
         return FinishStartedRequest(async, ctx);
     }
@@ -166,7 +177,7 @@ sceNpAuthGetAuthorizationCode(s32 req_id, const OrbisNpAuthGetAuthorizationCodeP
         LOG_ERROR(Lib_NpAuth, "called with null parameter");
         return ORBIS_NP_AUTH_ERROR_INVALID_ARGUMENT;
     }
-    if (!g_shadnet_enabled) {
+    if (!HasAccountService()) {
         LOG_ERROR(Lib_NpAuth, "shadnet is not enabled , user not found");
         return ORBIS_NP_ERROR_USER_NOT_FOUND;
     }
@@ -323,7 +334,7 @@ s32 GetIdToken(s32 req_id, const OrbisNpAuthGetIdTokenParameterA* param, s32 fla
         return error;
     }
 
-    if (!g_shadnet_enabled) {
+    if (!HasAccountService()) {
         ctx->SetResult(ORBIS_NP_ERROR_SIGNED_OUT);
         return FinishStartedRequest(async, ctx);
     }
@@ -349,7 +360,7 @@ s32 PS4_SYSV_ABI sceNpAuthGetIdToken(s32 req_id, const OrbisNpAuthGetIdTokenPara
         param->client_secret == nullptr || param->scope == nullptr) {
         return ORBIS_NP_AUTH_ERROR_INVALID_ARGUMENT;
     }
-    if (!g_shadnet_enabled) {
+    if (!HasAccountService()) {
         // Calls sceNpManagerIntGetUserIdByOnlineId to get a user id, returning any errors.
         // This call will not succeed while signed out because games cannot retrieve an online id.
         return ORBIS_NP_ERROR_USER_NOT_FOUND;
@@ -383,7 +394,7 @@ s32 PS4_SYSV_ABI sceNpAuthGetIdTokenV3(s32 req_id, const OrbisNpAuthGetIdTokenPa
 }
 
 void RegisterLib(Core::Loader::SymbolsResolver* sym) {
-    g_shadnet_enabled = EmulatorSettings.IsShadNetEnabled();
+    remote_account_service = EmulatorSettings.IsShadNetEnabled();
 
     LIB_FUNCTION("6bwFkosYRQg", "libSceNpAuth", 1, "libSceNpAuth", sceNpAuthCreateRequest);
     LIB_FUNCTION("N+mr7GjTvr8", "libSceNpAuth", 1, "libSceNpAuth", sceNpAuthCreateAsyncRequest);

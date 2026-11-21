@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/logging/log.h"
+#include "core/show23.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/network/http2.h"
@@ -763,7 +764,8 @@ s32 sendRequest(s64 request_id, s32 part_index, void* data, u64 data_size,
         return result;
     }
 
-    if (!EmulatorSettings.IsShadNetEnabled()) {
+    const char* local_web_api = Show23::LocalActive() ? "http://127.0.0.1:10080" : nullptr;
+    if (!EmulatorSettings.IsShadNetEnabled() && local_web_api == nullptr) {
         LOG_INFO(Lib_NpWebApi2, "Cannot send request, you are not signed in to shadNet");
         request->RemoveUser();
         user_ctx->RemoveUser();
@@ -772,7 +774,8 @@ s32 sendRequest(s64 request_id, s32 part_index, void* data, u64 data_size,
     }
 
     if (request->GetHttpRequestId() == 0) {
-        std::string base_url = EmulatorSettings.GetShadNetWebApiServer();
+        std::string base_url =
+            local_web_api != nullptr ? local_web_api : EmulatorSettings.GetShadNetWebApiServer();
         s32 template_id = user_ctx->GetHttpTemplateId();
         // Technically this should be base_url + api_group + path,
         // but shadNet doesn't seem to use the api_group for endpoints?

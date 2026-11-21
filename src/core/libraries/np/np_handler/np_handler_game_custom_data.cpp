@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <cstring>
 #include <random>
 #include <httplib.h>
@@ -60,6 +61,10 @@ std::string UserLanguage(s32 user_id) {
 NpHandler::GameCustomDataResult NpHandler::SendGameCustomData(s32 user_id,
                                                               const GameCustomDataToSend& item) {
     GameCustomDataResult result;
+    if (Show23::LocalRequested()) {
+        result.message = "unavailable in local mode";
+        return result;
+    }
     const std::string base_url = EmulatorSettings.GetShadNetWebApiServer();
     const std::string token = GetBearerToken(user_id);
     if (base_url.empty() || token.empty()) {
@@ -147,6 +152,10 @@ NpHandler::GameCustomDataResult NpHandler::ListReceivedGameCustomData(
     s32 user_id, const std::string& np_language, std::vector<ReceivedGameCustomData>& out) {
     GameCustomDataResult result;
     out.clear();
+    if (Show23::LocalRequested()) {
+        result.message = "unavailable in local mode";
+        return result;
+    }
     const std::string base_url = EmulatorSettings.GetShadNetWebApiServer();
     const std::string token = GetBearerToken(user_id);
     if (base_url.empty() || token.empty()) {

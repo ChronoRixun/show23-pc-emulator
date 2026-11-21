@@ -12,6 +12,11 @@ class IFile;
 }
 
 namespace Show23 {
+inline constexpr const char* LocalOnlineId = "ScoutLocal";
+inline constexpr u64 LocalAccountId = 0x0123456789abcdefULL;
+inline constexpr const char* LocalAuthCode = "ScoutLocalAuthCode0001";
+inline constexpr s32 LocalIssuerId = 256;
+
 void RequestLocal(std::filesystem::path ca_path);
 bool LocalRequested();
 bool ResolveLoopback(std::string_view host, u32& address);

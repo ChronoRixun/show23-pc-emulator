@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -53,6 +54,9 @@ std::string JsonEscape(const std::string& in) {
 bool NpHandler::SendSessionInvitation(s32 user_id, const std::string& session_id,
                                       const std::vector<std::string>& to,
                                       const std::string& message) {
+    if (Show23::LocalRequested()) {
+        return false;
+    }
     if (session_id.empty() || to.empty()) {
         LOG_ERROR(NpHandler, "empty session_id or recipient list");
         return false;
