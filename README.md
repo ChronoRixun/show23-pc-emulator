@@ -3,6 +3,27 @@ SPDX-FileCopyrightText: 2026 shadPS4 Emulator Project
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
+# show23-pc-emulator
+
+A fork of [shadPS4](https://github.com/shadps4-emu/shadPS4) for MLB The Show 23 (PS4, CUSA35521, version 1.00), part of show23-pc.
+
+**Players:** download the launcher release from https://github.com/ChronoRixun/show23-pc-launcher/releases. It bundles this build, sets up your own copy of the game and starts everything for you.
+
+Branch `release` holds only the fixes this game needs, measured performance changes and local sign-in (`--show23-local-ca <path>`, loopback only), tied to the verified 1.00 executable. See PORT.md.
+
+Known limits: small stutters; no steady 60 FPS in games.
+
+Credits: shadPS4 and its contributors; [mlb_pc](https://github.com/victorgbd/mlb_pc), whose MLB_PORT.md fix notes informed several fixes here.
+
+Not affiliated with shadPS4, Sony Interactive Entertainment, San Diego Studio or MLB. Contains no game files.
+
+Licence: GPL-2.0-or-later, as upstream (LICENSE, LICENSES/). Notices of the bundled third-party libraries: THIRD-PARTY-NOTICES.txt.
+
+---
+
+The upstream shadPS4 README follows.
+
+
 <h1 align="center">
   <br>
   <a href="https://shadps4.net/"><img src="https://github.com/shadps4-emu/shadPS4/blob/main/.github/shadps4.png" width="220"></a>
