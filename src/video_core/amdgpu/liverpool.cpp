@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <boost/preprocessor/stringize.hpp>
 
 #include "common/assert.h"
@@ -18,6 +19,37 @@
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+
+namespace {
+template <typename Rasterizer>
+bool PollTest(Rasterizer* rasterizer, const AmdGpu::PM4CmdWaitRegMem& wait,
+                   std::span<const u32> regs) {
+    if (Show23::Enabled() && rasterizer != nullptr &&
+        wait.mem_space.Value() == AmdGpu::PM4CmdWaitRegMem::MemSpace::Memory) {
+        const auto address = wait.Address<VAddr>();
+        if (rasterizer->GetBufferCache().OnlySharesPageWithGpuData(address, sizeof(u32))) {
+            u32 value{};
+            Core::Memory::Instance()->CopySparseMemory(address, reinterpret_cast<u8*>(&value),
+                                                       sizeof(u32));
+            return wait.TestValue(value);
+        }
+    }
+    return wait.Test(regs);
+}
+template <typename Rasterizer>
+void MirrorEventLabel(Rasterizer* rasterizer, void* address, u64 data, u32 num_bytes) {
+    const VAddr addr = reinterpret_cast<VAddr>(address);
+    if (!Show23::Enabled() || rasterizer == nullptr || (addr & 3) != 0 ||
+        (num_bytes != sizeof(u32) && num_bytes != sizeof(u64)) ||
+        !rasterizer->GetBufferCache().IsRegionGpuModified(addr, num_bytes)) {
+        return;
+    }
+    rasterizer->FillBuffer(addr, sizeof(u32), u32(data), false);
+    if (num_bytes == sizeof(u64)) {
+        rasterizer->FillBuffer(addr + sizeof(u32), sizeof(u32), u32(data >> 32), false);
+    }
+}
+} // namespace
 
 namespace AmdGpu {
 
@@ -724,9 +756,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 if (rasterizer) {
                     rasterizer->OnFence();
                 }
-                event_eos->SignalFence([](void* address, u64 data, u32 num_bytes) {
+                event_eos->SignalFence([this](void* address, u64 data, u32 num_bytes) {
                     auto* memory = Core::Memory::Instance();
                     ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+                    MirrorEventLabel(rasterizer, address, data, num_bytes);
                 });
                 if (event_eos->command == PM4CmdEventWriteEos::Command::GdsStore) {
                     ASSERT(event_eos->size == 1);
@@ -743,10 +776,15 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                 if (rasterizer) {
                     rasterizer->OnFence();
                 }
+                const bool chosen_value = event_eop->data_sel.Value() == DataSelect::Data32Low ||
+                                          event_eop->data_sel.Value() == DataSelect::Data64;
                 event_eop->SignalFence(
-                    [](void* address, u64 data, u32 num_bytes) {
+                    [this, chosen_value](void* address, u64 data, u32 num_bytes) {
                         auto* memory = Core::Memory::Instance();
                         ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
+                        if (chosen_value) {
+                            MirrorEventLabel(rasterizer, address, data, num_bytes);
+                        }
                     },
                     [] { Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxEop); });
                 break;
@@ -852,7 +890,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                     vo_port->WaitVoLabel([&] { return wait_reg_mem->Test(regs.reg_array); });
                     break;
                 }
-                while (!wait_reg_mem->Test(regs.reg_array)) {
+                while (!PollTest(rasterizer, *wait_reg_mem, regs.reg_array)) {
                     YIELD_GFX();
                 }
                 break;
@@ -1208,7 +1246,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         case PM4ItOpcode::WaitRegMem: {
             const auto* wait_reg_mem = reinterpret_cast<const PM4CmdWaitRegMem*>(header);
             ASSERT(wait_reg_mem->engine.Value() == PM4CmdWaitRegMem::Engine::Me);
-            while (!wait_reg_mem->Test(regs.reg_array)) {
+            while (!PollTest(rasterizer, *wait_reg_mem, regs.reg_array)) {
                 YIELD_ASC(vqid);
             }
             break;

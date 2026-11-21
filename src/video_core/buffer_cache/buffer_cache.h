@@ -123,6 +123,15 @@ public:
     /// Synchronizes all buffers needed for DMA.
     void SynchronizeDmaBuffers();
 
+    bool OnlySharesPageWithGpuData(VAddr addr, size_t size) {
+        if (!IsRegionGpuModified(addr, size)) {
+            return false;
+        }
+        bool touches = false;
+        gpu_modified_ranges.ForEachInRange(addr, size, [&](VAddr, VAddr) { touches = true; });
+        return !touches;
+    }
+
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);
 
