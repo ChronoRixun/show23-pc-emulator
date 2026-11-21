@@ -14,6 +14,7 @@ class IFile;
 namespace Show23 {
 void RequestLocal(std::filesystem::path ca_path);
 bool LocalRequested();
+bool ResolveLoopback(std::string_view host, u32& address);
 const std::filesystem::path& LocalCaPath();
 bool Enabled();
 bool LocalActive();

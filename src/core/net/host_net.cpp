@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <algorithm>
 #include <array>
 #include <climits>
@@ -406,11 +407,46 @@ void PrepareClose(NativeSocket s, bool guest_blocking) {
     setsockopt(s, SOL_SOCKET, LingerOption, reinterpret_cast<const char*>(&value), sizeof(value));
 }
 
+static bool LoopbackPeer(const sockaddr* addr, socklen_t len) {
+    if (!addr || len < sizeof(sockaddr_in) || addr->sa_family != AF_INET) {
+        return false;
+    }
+    return (ntohl(reinterpret_cast<const sockaddr_in*>(addr)->sin_addr.s_addr) >> 24) == 127;
+}
+
+static bool HasLoopbackPeer(NativeSocket socket) {
+    sockaddr_storage peer{};
+    socklen_t len = sizeof(peer);
+    return getpeername(socket, reinterpret_cast<sockaddr*>(&peer), &len) == 0 &&
+           LoopbackPeer(reinterpret_cast<const sockaddr*>(&peer), len);
+}
+
 Error Bind(NativeSocket s, const sockaddr* addr, socklen_t len) {
+    sockaddr_in local{};
+    if (Show23::LocalRequested() && !LoopbackPeer(addr, len)) {
+        if (!addr || len < sizeof(local) || addr->sa_family != AF_INET) {
+            return Error::NetUnreach;
+        }
+        local = *reinterpret_cast<const sockaddr_in*>(addr);
+        if (local.sin_addr.s_addr != htonl(INADDR_ANY)) {
+            return Error::NetUnreach;
+        }
+        local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr = reinterpret_cast<const sockaddr*>(&local);
+        len = sizeof(local);
+    }
     return bind(s, addr, len) == 0 ? Error::Ok : LastError();
 }
 
 Error Listen(NativeSocket s, int backlog) {
+    if (Show23::LocalRequested()) {
+        sockaddr_storage bound{};
+        socklen_t len = sizeof(bound);
+        if (getsockname(s, reinterpret_cast<sockaddr*>(&bound), &len) != 0 ||
+            !LoopbackPeer(reinterpret_cast<const sockaddr*>(&bound), len)) {
+            return Error::NetUnreach;
+        }
+    }
     return listen(s, backlog) == 0 ? Error::Ok : LastError();
 }
 
@@ -419,6 +455,9 @@ Error ShutdownSocket(NativeSocket s, int how) {
 }
 
 Error Connect(NativeSocket s, const sockaddr* addr, socklen_t len) {
+    if (Show23::LocalRequested() && !LoopbackPeer(addr, len)) {
+        return Error::NetUnreach;
+    }
     if (connect(s, addr, len) == 0) {
         return Error::Ok;
     }
@@ -477,6 +516,11 @@ NativeSocket Accept(NativeSocket s, sockaddr* addr, socklen_t* len, Error* error
             CloseSocket(c);
             return InvalidSocket;
         }
+        if (Show23::LocalRequested() && !HasLoopbackPeer(c)) {
+            CloseSocket(c);
+            *error = Error::NetUnreach;
+            return InvalidSocket;
+        }
         *error = Error::Ok;
         return c;
     }
@@ -484,6 +528,9 @@ NativeSocket Accept(NativeSocket s, sockaddr* addr, socklen_t* len, Error* error
 
 IoResult SendTo(NativeSocket s, const void* buf, size_t len, int flags, const sockaddr* addr,
                 socklen_t addr_len) {
+    if (Show23::LocalRequested() && !(addr ? LoopbackPeer(addr, addr_len) : HasLoopbackPeer(s))) {
+        return {-1, Error::NetUnreach};
+    }
 #ifdef MSG_NOSIGNAL
     flags |= MSG_NOSIGNAL;
 #endif

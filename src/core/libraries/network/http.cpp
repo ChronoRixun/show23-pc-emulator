@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -834,6 +835,17 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
             }
         }
 
+        if (Show23::LocalRequested()) {
+            u32 literal{};
+            const bool local = (plan.host == "localhost" || plan.host.starts_with("127.")) &&
+                               Show23::ResolveLoopback(plan.host, literal);
+            if (!local) {
+                plan.path = "/__host/" + plan.host + plan.path;
+                plan.scheme = "http";
+                plan.port = 10080;
+            }
+            plan.host = "127.0.0.1";
+        }
         if (plan.scheme == "https" && !ORBIS_HTTP_HAS_HTTPS) {
             LOG_ERROR(Lib_Http, "HTTPS request but cpp-httplib lacks OpenSSL support");
             SynthesizeTransportFailureResponse(out_res);

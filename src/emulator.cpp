@@ -457,6 +457,9 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         verified_main = Show23::VerifyMain(mnt->Open("/app0/" + eboot_name.generic_string(), false));
     }
     EmulatorSettings.Load(id);
+    if (Show23::LocalRequested()) {
+        EmulatorSettings.SetShadNetSessionDisabled(true);
+    }
     // Switch to configured log
     Common::Log::Switch((!id.empty() && EmulatorSettings.IsLogSeparate()) ? id + ".log"
                                                                           : "shad_log.txt",
@@ -710,7 +713,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
 
 #ifdef ENABLE_DISCORD_RPC
         // Discord RPC
-        if (EmulatorSettings.IsDiscordRPCEnabled()) {
+        if (!Show23::LocalRequested() && EmulatorSettings.IsDiscordRPCEnabled()) {
             auto* rpc = Common::Singleton<DiscordRPCHandler::RPC>::Instance();
             if (rpc->getRPCEnabled() == false) {
                 rpc->init();
@@ -719,7 +722,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         }
 #endif
 
-        if (EmulatorSettings.IsConnectedToNetwork() &&
+        if (!Show23::LocalRequested() && EmulatorSettings.IsConnectedToNetwork() &&
             EmulatorSettings.IsDeviceDiscoveryEnabled()) {
             Libraries::Net::DiscoveryResponder::Instance().Start();
         }

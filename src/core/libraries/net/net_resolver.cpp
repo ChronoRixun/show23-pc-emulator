@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/show23.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -65,6 +66,14 @@ bool IsOnline() {
 
 // IPv4 only, at most 10 records.
 s32 Lookup(std::string hostname, bool allow_literal, std::vector<u32>* addrs) {
+    if (Show23::LocalRequested()) {
+        u32 address{};
+        if (!Show23::ResolveLoopback(hostname, address)) {
+            return ORBIS_NET_ERROR_RESOLVER_ENODNS;
+        }
+        addrs->push_back(address);
+        return 0;
+    }
     if (!hostname.empty() && hostname.back() == '.') {
         hostname.pop_back();
     }
@@ -240,6 +249,13 @@ s32 RunLookup(s32 id, LookupKind kind, bool async, Work work, Deliver deliver) {
 }
 
 s32 ReverseLookup(u32 addr, std::string* name) {
+    if (Show23::LocalRequested()) {
+        if ((ntohl(addr) >> 24) != 127) {
+            return ORBIS_NET_ERROR_RESOLVER_ENODNS;
+        }
+        *name = "localhost";
+        return 0;
+    }
     if (addr == htonl(INADDR_LOOPBACK)) {
         *name = "localhost";
         return 0;

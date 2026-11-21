@@ -3,6 +3,7 @@
 
 #ifdef _WIN32
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
+#include "core/show23.h"
 #include <Ws2tcpip.h>
 #include <iphlpapi.h>
 #include <winsock2.h>
@@ -348,6 +349,10 @@ u32 NetUtilInternal::GetNatType() const {
 
 bool NetUtilInternal::RetrieveIp() {
     std::scoped_lock lock{m_mutex};
+    if (Show23::LocalRequested()) {
+        ip = "127.0.0.1";
+        return true;
+    }
 
     auto sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
@@ -388,6 +393,14 @@ bool NetUtilInternal::RetrieveIp() {
 }
 
 int NetUtilInternal::ResolveHostname(const char* hostname, Libraries::Net::OrbisNetInAddr* addr) {
+    if (Show23::LocalRequested()) {
+        u32 address{};
+        if (!hostname || !addr || !Show23::ResolveLoopback(hostname, address)) {
+            return ORBIS_NET_ERETURN;
+        }
+        addr->inaddr_addr = address;
+        return ORBIS_OK;
+    }
     const addrinfo hints = {
         .ai_flags = AI_V4MAPPED | AI_ADDRCONFIG,
         .ai_family = AF_INET,

@@ -11,6 +11,7 @@
 #include <openssl/evp.h>
 #include "common/logging/log.h"
 #include "core/file_sys/ifile.h"
+#include "core/net/host_net.h"
 
 namespace Show23 {
 namespace {
@@ -56,6 +57,30 @@ void RequestLocal(std::filesystem::path path) {
     }
     local_ca = std::filesystem::absolute(path);
 }
+bool ResolveLoopback(std::string_view host, u32& address) {
+    if (host.ends_with('.')) {
+        host.remove_suffix(1);
+    }
+    if (host.empty() || host.find('\0') != std::string_view::npos) {
+        return false;
+    }
+    std::string name{host};
+    std::ranges::transform(name, name.begin(), [](char c) {
+        return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
+    });
+    if (name == "localhost" || name == "production.mlb.mlbtheshow.net" ||
+        name == "production.mlb23.mlbtheshow.net") {
+        address = htonl(INADDR_LOOPBACK);
+        return true;
+    }
+    in_addr ip{};
+    if (inet_pton(AF_INET, name.c_str(), &ip) == 1 && (ntohl(ip.s_addr) >> 24) == 127) {
+        address = ip.s_addr;
+        return true;
+    }
+    return false;
+}
+
 bool LocalRequested() { return !local_ca.empty(); }
 const std::filesystem::path& LocalCaPath() { return local_ca; }
 bool Enabled() { return enabled; }
